@@ -30,6 +30,9 @@
 // Merk: kildekoden holdes ren ASCII slik at den taaler kopiering mellom
 // verktoy med ulike tegnsett.
 
+// Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
+const VERSJON = 2;
+
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
 const ALLOWED_ORIGINS = ['https://mag-kri.github.io', 'http://localhost:8613'];
@@ -421,6 +424,8 @@ export default {
 
     try {
       /* --- Innlogging og registrering --- */
+
+      if (sti === '/api/versjon') return json({ version: VERSJON });
 
       if (sti === '/api/auth/salt') {
         const epost = epostAv(url.searchParams.get('email'));

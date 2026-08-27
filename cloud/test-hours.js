@@ -37,6 +37,8 @@ export async function kjorTimeTest() {
   const env = { DB, ENC_KEY: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))), SETUP_KEY: 'k' };
 
   const kall = [];
+  const byttelogg = [];
+  let aktivtProsjekt = 1; // brukeren star pa Prosjekt A
   const idag = new Date().toISOString().slice(0, 10);
   const ekte = window.fetch;
   window.fetch = async (u, o) => {
@@ -56,7 +58,21 @@ export async function kjorTimeTest() {
     if (url.includes('ajax_vehicles.json?projectId=1')) return new Response(JSON.stringify({ vehicles: [{ id: 11, uuid: 'm11', name: 'Gravemaskin A', worktimeLastWeek: 20 }] }), { status: 200 });
     if (url.includes('ajax_vehicles.json?projectId=2')) return new Response(JSON.stringify({ vehicles: [{ id: 22, uuid: 'm22', name: 'Lastebil B', worktimeLastWeek: 30 }] }), { status: 200 });
     if (url.includes('ajax_vehicles.json?projectId=3')) return new Response(JSON.stringify({ vehicles: [{ id: 33, uuid: 'm33', name: 'Sovende maskin', worktimeLastWeek: 0, lastReport: 0, lastActive: 0 }] }), { status: 200 });
-    if (url.includes('/ajax_calendar_events.json')) return new Response(JSON.stringify({ events: [{ start: idag + ' 08:00', end: idag + ' 16:00' }] }), { status: 200 });
+    if (url.includes('/ajax_current_project.json')) {
+      return new Response(JSON.stringify({ id: aktivtProsjekt, name: 'Aktivt' }), { status: 200 });
+    }
+    if (url.includes('/ajax_change_project.json')) {
+      aktivtProsjekt = Number(new URL(url).searchParams.get('projectId'));
+      byttelogg.push(aktivtProsjekt);
+      return new Response('{}', { status: 200 });
+    }
+    if (url.includes('/ajax_calendar_events.json')) {
+      // Som i Infrakit: kalenderen svarer kun for maskiner i AKTIVT prosjekt
+      const vid = Number(new URL(url).searchParams.get('vehicleId'));
+      const hjemme = { 11: 1, 22: 2, 33: 3 }[vid];
+      if (hjemme !== aktivtProsjekt) return new Response(JSON.stringify({ events: [] }), { status: 200 });
+      return new Response(JSON.stringify({ events: [{ start: idag + ' 08:00', end: idag + ' 16:00' }] }), { status: 200 });
+    }
     if (url.includes('/ajax_calendar_active_model_events')) return new Response(JSON.stringify({ events: [{ start: idag + ' 09:00', title: 'Traubunn P200' }] }), { status: 200 });
     if (url.includes('/areas')) return new Response(JSON.stringify({ areas: [{ uuid: 'a1', title: 'Brudd' }, { uuid: 'a2', title: 'Deponi' }] }), { status: 200 });
     if (url.includes('/trips')) {
@@ -103,5 +119,8 @@ export async function kjorTimeTest() {
     prosjektrute: prosjekter.data?.projects,
     kallPerProsjekt,
     kunProsjekt2: (kunP2.data?.days || []).map((d) => d.machine + ' (' + d.project + ')'),
+    prosjektbytter: byttelogg,
+    aktivtProsjektTilSlutt: aktivtProsjekt,
+    satteTilbake: aktivtProsjekt === 1,
   };
 }

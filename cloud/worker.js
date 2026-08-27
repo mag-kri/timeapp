@@ -207,6 +207,11 @@ async function ik(sti, token) {
   return r.json();
 }
 
+async function ikPost(sti, token) {
+  const r = await fetch(IK + sti, { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+  return r.ok;
+}
+
 // Cloudflare tillater maks 50 utgaaende kall per forespoersel, saa timehentingen
 // holder regnskap og prioriterer maskinene med mest aktivitet.
 const MAKS_KALL = 44;
@@ -258,29 +263,48 @@ async function buildHours(token, kunProsjektId) {
   let plist = await hentProsjekter(token);
   kall++;
   if (kunProsjektId) plist = plist.filter((p) => String(p.id) === String(kunProsjektId));
-  const kjoretoy = new Map(); // id -> kjoretoy + prosjekt
+
+  // Infrakit serverer kalenderdata KUN for maskiner i det aktive prosjektet, saa
+  // vi maa bytte aktivt prosjekt underveis - og sette tilbake det brukeren hadde.
+  let opprinnelig = null;
+  try {
+    const cur = await ik('/ajax_current_project.json', token);
+    kall++;
+    if (cur && cur.id) opprinnelig = cur.id;
+  } catch { /* klarer oss uten */ }
+
+  const grense = Date.now() - 16 * 86400000;
+  const vlist = [];
 
   for (const p of plist) {
     if (!budsjett()) break;
     try {
+      if (String(p.id) !== String(opprinnelig)) {
+        await ikPost('/ajax_change_project.json?projectId=' + p.id, token);
+        kall++;
+      }
       const veh = await ik('/ajax_vehicles.json?projectId=' + p.id, token);
       kall++;
-      for (const v of veh.vehicles || []) {
-        if (!v.id || kjoretoy.has(v.id)) continue;
-        kjoretoy.set(v.id, { v, projectName: String(p.name || ''), projectUuid: String(p.uuid || '') });
+      const aktive = (veh.vehicles || [])
+        .filter((v) => v.id && (Number(v.worktimeLastWeek) > 0 || Number(v.lastReport) > grense || Number(v.lastActive) > grense))
+        .sort((a, b) => (Number(b.worktimeLastWeek) || 0) - (Number(a.worktimeLastWeek) || 0));
+      for (const v of aktive) {
+        vlist.push({ v, projectName: String(p.name || ''), projectUuid: String(p.uuid || '') });
+        if (!budsjett()) break;
+        await samleTimer(v, p);
       }
     } catch { /* hopp over prosjekt uten tilgang */ }
   }
 
-  // Prioriter maskinene som faktisk har vaert i drift den siste tiden
-  const grense = Date.now() - 16 * 86400000;
-  const vlist = [...kjoretoy.values()]
-    .filter((x) => Number(x.v.worktimeLastWeek) > 0 || Number(x.v.lastReport) > grense || Number(x.v.lastActive) > grense)
-    .sort((a, b) => (Number(b.v.worktimeLastWeek) || 0) - (Number(a.v.worktimeLastWeek) || 0));
+  // Sett tilbake prosjektet brukeren hadde aktivt i Infrakit
+  if (opprinnelig && plist.some((p) => String(p.id) !== String(opprinnelig))) {
+    try { await ikPost('/ajax_change_project.json?projectId=' + opprinnelig, token); } catch { /* best effort */ }
+  }
 
-  for (const post of vlist) {
-    if (!budsjett()) break;
-    const v = post.v;
+  return JSON.stringify({ updated: iso(), days });
+
+  async function samleTimer(v, p) {
+    const post = { v, projectName: String(p.name || ''), projectUuid: String(p.uuid || '') };
     try {
       const per = new Map();
       const bucket = (dag) => {
@@ -396,7 +420,6 @@ async function buildHours(token, kunProsjektId) {
       }
     } catch { /* hopp over kjoretoy som feiler */ }
   }
-  return JSON.stringify({ updated: iso(), days });
 }
 
 async function medCache(id, type, maxAlderMs, lag) {

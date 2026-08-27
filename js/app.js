@@ -355,7 +355,8 @@ function renderInfrakitKort() {
             : 'Bedriften er ikke koblet til Infrakit ennå. Koordinatoren din må gjøre det.'
       }</p>
       ${erKoordinator() ? `<button class="btn${tilkoblet ? '' : ' primary'}" data-action="admin-connect" style="width:100%">${tilkoblet ? 'Koble til på nytt …' : 'Koble til Infrakit …'}</button>` : ''}
-      <button class="btn" data-action="sync-machines" style="width:100%;margin-top:8px">Oppdater maskiner og timer</button>
+      <button class="btn" data-action="sync-machines" style="width:100%;margin-top:8px"${ui.synkStatus ? ' disabled' : ''}>${ui.synkStatus ? 'Henter …' : 'Oppdater maskiner og timer'}</button>
+      ${ui.synkStatus ? `<p class="muted small center" style="margin:8px 0 0">${esc(ui.synkStatus)}</p>` : ''}
       <details style="margin-top:12px">
         <summary class="small muted" style="cursor:pointer">Avansert: serveradresse</summary>
         <input class="input" id="proxyUrl" value="${esc(proxyConf().url || DEFAULT_PROXY)}" autocomplete="off" inputmode="url" style="margin-top:10px">
@@ -854,21 +855,27 @@ async function fetchMachineHours(showResult) {
     let feilet = 0;
     if (prosjekter.length) {
       store.ensureProjects(prosjekter.map((p) => p.name));
-      for (let i = 0; i < prosjekter.length; i += 3) {
-        const pulje = prosjekter.slice(i, i + 3);
-        const svar = await Promise.all(pulje.map((p) =>
-          api('api/infrakit/hours?projectId=' + encodeURIComponent(p.id))
-            .then((s) => ({ p, s })).catch(() => ({ p, s: null }))
-        ));
-        for (const { p, s } of svar) {
-          if (s && Array.isArray(s.days)) {
+      // Ett om gangen: Infrakit har ett aktivt prosjekt per bruker, og serveren
+      // bytter fram og tilbake for å få tak i kalenderdataene.
+      for (let i = 0; i < prosjekter.length; i++) {
+        const p = prosjekter[i];
+        if (showResult) {
+          ui.synkStatus = `Henter ${i + 1} av ${prosjekter.length}: ${p.name}`;
+          if (ui.tab === 'more') render();
+        }
+        try {
+          const s = await api('api/infrakit/hours?projectId=' + encodeURIComponent(p.id));
+          if (Array.isArray(s.days)) {
             dager.push(...s.days);
             hentet.push(p.name);
           } else {
             feilet++;
           }
+        } catch {
+          feilet++;
         }
       }
+      ui.synkStatus = '';
     } else {
       const data = await api('api/infrakit/hours');
       if (Array.isArray(data.days)) dager = data.days;
@@ -882,8 +889,11 @@ async function fetchMachineHours(showResult) {
         : `Fant ingen maskintimer${feilTekst}.`);
     }
   } catch (err) {
+    ui.synkStatus = '';
     if (showResult) alert(String(err.message || err));
   }
+  ui.synkStatus = '';
+  if (ui.tab === 'more') render();
 }
 
 function downloadExport() {

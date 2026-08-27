@@ -55,8 +55,8 @@ export async function kjorTimeTest() {
         { id: 3, uuid: 'p3', name: 'Prosjekt C' },
       ]), { status: 200 });
     }
-    if (url.includes('ajax_vehicles.json?projectId=1')) return new Response(JSON.stringify({ vehicles: [{ id: 11, uuid: 'm11', name: 'Gravemaskin A', worktimeLastWeek: 20 }] }), { status: 200 });
-    if (url.includes('ajax_vehicles.json?projectId=2')) return new Response(JSON.stringify({ vehicles: [{ id: 22, uuid: 'm22', name: 'Lastebil B', worktimeLastWeek: 30 }] }), { status: 200 });
+    if (url.includes('ajax_vehicles.json?projectId=1')) return new Response(JSON.stringify({ vehicles: [{ id: 11, uuid: 'm11', name: 'Gravemaskin A', type: 1, worktimeLastWeek: 20 }] }), { status: 200 });
+    if (url.includes('ajax_vehicles.json?projectId=2')) return new Response(JSON.stringify({ vehicles: [{ id: 22, uuid: 'm22', name: 'Lastebil B', type: 9, worktimeLastWeek: 30 }] }), { status: 200 });
     if (url.includes('ajax_vehicles.json?projectId=3')) return new Response(JSON.stringify({ vehicles: [{ id: 33, uuid: 'm33', name: 'Sovende maskin', worktimeLastWeek: 0, lastReport: 0, lastActive: 0 }] }), { status: 200 });
     if (url.includes('/ajax_current_project.json')) {
       return new Response(JSON.stringify({ id: aktivtProsjekt, name: 'Aktivt' }), { status: 200 });
@@ -71,17 +71,10 @@ export async function kjorTimeTest() {
       const vid = Number(new URL(url).searchParams.get('vehicleId'));
       const hjemme = { 11: 1, 22: 2, 33: 3 }[vid];
       if (hjemme !== aktivtProsjekt) return new Response(JSON.stringify({ events: [] }), { status: 200 });
-      // Som i Infrakit: tooltip baerer pelnummer og modellnavn
-      return new Response(JSON.stringify({ events: [{
-        start: idag + ' 08:00', end: idag + ' 16:00', title: '',
-        tooltip: '<b>Maskin</b> 08:00 - 16:00<br>Foerste pel.nr.:1200<br>Siste pel.nr.:1450<br>Modell:Traubunn P200',
-      }] }), { status: 200 });
-    }
-    // Gravere har tom title - navnet ligger i tooltip-en
-    if (url.includes('/ajax_calendar_active_model_events')) {
+      // Som i Infrakit: tooltip baerer pelnummer og modellnavn - og en oekt UTEN modell
       return new Response(JSON.stringify({ events: [
-        { start: idag + ' 09:00', title: '', tooltip: '<b>Slitelag AGB16 - 42mm</b><br/>09:00 - 10:00<br>' },
-        { start: idag + ' 10:00', title: '', tooltip: '<b>Grusdekke</b><br/>10:00 - 12:00<br>' },
+        { start: idag + ' 08:00', end: idag + ' 14:00', title: '', tooltip: '<b>Maskin</b> 08:00 - 14:00<br>Foerste pel.nr.:1200<br>Siste pel.nr.:1450<br>Modell:Traubunn P200' },
+        { start: idag + ' 14:00', end: idag + ' 16:00', title: '', tooltip: '<b>Maskin</b> 14:00 - 16:00<br>Foerste pel.nr.:0<br>Siste pel.nr.:0<br>Modell:' },
       ] }), { status: 200 });
     }
     if (url.includes('/areas')) return new Response(JSON.stringify({ areas: [{ uuid: 'a1', title: 'Brudd' }, { uuid: 'a2', title: 'Deponi' }] }), { status: 200 });

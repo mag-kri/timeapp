@@ -31,7 +31,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 5;
+const VERSJON = 6;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -220,6 +220,7 @@ const osloFmt = new Intl.DateTimeFormat('sv-SE', {
   timeZone: 'Europe/Oslo', year: 'numeric', month: '2-digit', day: '2-digit',
 });
 const osloDate = (ms) => osloFmt.format(new Date(ms));
+const timerTekst = (ms) => String(Math.round((ms / 3600000) * 10) / 10).replace('.', ',') + ' t';
 
 async function buildMachines(token) {
   const pr = await ik('/v1/projects', token);
@@ -329,7 +330,7 @@ async function buildHours(token, kunProsjektId) {
     try {
       const per = new Map();
       const bucket = (dag) => {
-        if (!per.has(dag)) per.set(dag, { ms: 0, first: null, last: null, turer: 0, km: 0, pelMin: null, pelMaks: null, mod: new Map(), mat: new Map(), ruter: new Map() });
+        if (!per.has(dag)) per.set(dag, { ms: 0, first: null, last: null, turer: 0, km: 0, pelMin: null, pelMaks: null, mod: new Map(), modUten: { ms: 0, fra: null }, mat: new Map(), ruter: new Map() });
         return per.get(dag);
       };
 
@@ -353,26 +354,18 @@ async function buildHours(token, kunProsjektId) {
           if (d.pelMin === null || pel < d.pelMin) d.pelMin = pel;
           if (d.pelMaks === null || pel > d.pelMaks) d.pelMaks = pel;
         }
-        const mod = tt.match(/Modell\s*:\s*([^<]+)/i);
-        if (mod && mod[1].trim()) d.mod.set(mod[1].trim(), true);
-      }
-
-      try {
-        if (!per.size || !budsjett()) throw new Error('hopp over');
-        const mev = await ik(`/ajax_calendar_active_model_events.json?vehicleId=${v.id}&start=${startMs}&end=${endMs}`, token);
-        kall++;
-        for (const m of mev.events || []) {
-          // Modellnavnet ligger i tooltip-en naar title er tom (gjelder gravere)
-          let navn = String(m.title || '').trim();
-          if (!navn) {
-            const b = String(m.tooltip || '').match(/<b>([^<]+)<\/b>/i);
-            navn = b ? b[1].trim() : '';
-          }
-          if (!m.start || !navn) continue;
-          const dag = String(m.start).slice(0, 10);
-          if (per.has(dag)) per.get(dag).mod.set(navn, true);
+        // Tid fordeles per modell med foerste starttid - og tid KJOERT UTEN
+        // MODELL noteres eksplisitt, siden det ofte er et avvik for
+        // maskinstyrte maskiner
+        const mod = tt.match(/Modell\s*:\s*([^<]*)/i);
+        if (mod) {
+          const navn = mod[1].trim();
+          const maal = navn ? (d.mod.get(navn) || { ms: 0, fra: null }) : d.modUten;
+          maal.ms += ms;
+          if (!maal.fra || fra < maal.fra) maal.fra = fra;
+          if (navn) d.mod.set(navn, maal);
         }
-      } catch { /* modeller er valgfritt */ }
+      }
 
       const pu = post.projectUuid || (v.activeProject ? String(v.activeProject.uuid) : '');
       if (pu && per.size && v.uuid) {
@@ -429,9 +422,17 @@ async function buildHours(token, kunProsjektId) {
         if (d.km >= 1) deler.push(Math.round(d.km) + ' km');
         if (d.pelMaks) deler.push(d.pelMin === d.pelMaks ? 'pel ' + d.pelMaks : 'pel ' + d.pelMin + '-' + d.pelMaks);
         if (deler.length) linjer.push(deler.join(SEP));
-        if (d.mod.size) {
+        const erLastebil = Number(v.type) === 9;
+        const visUtenModell = d.modUten.ms > 60000 && !erLastebil;
+        if (d.mod.size || visUtenModell) {
           linjer.push('', 'Modeller:');
-          for (const navn of [...d.mod.keys()].sort()) linjer.push(BULLET + navn);
+          const kronologisk = [...d.mod].sort((a, b) => String(a[1].fra || '99').localeCompare(String(b[1].fra || '99')));
+          for (const [navn, m] of kronologisk) {
+            linjer.push(`${BULLET}${m.fra ? m.fra + ' ' : ''}${navn}${SEP}${timerTekst(m.ms)}`);
+          }
+          if (visUtenModell) {
+            linjer.push(`${BULLET}${d.modUten.fra ? d.modUten.fra + ' ' : ''}Uten modell${SEP}${timerTekst(d.modUten.ms)}`);
+          }
         }
         if (d.mat.size) {
           linjer.push('', 'Masse:');

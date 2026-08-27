@@ -247,13 +247,13 @@ function renderDay() {
       ${entries.length ? entryList(entries) : `<p class="empty">Ingen timer ført ${isToday ? 'i dag' : 'denne dagen'}.</p>`}
       <div class="day-total"><span>Sum</span><strong>${d.fmtHours(total)} t</strong></div>
     </section>
+    <button class="btn primary big" data-action="new-entry">+ Ny timeføring</button>
     ${machineEntries.length ? `
     <section class="card">
       <h2>Maskintimer</h2>
       ${entryList(machineEntries)}
       <div class="day-total"><span>Sum maskiner</span><strong>${d.fmtHours(machineEntries.reduce((s, e) => s + e.hours, 0))} t</strong></div>
-    </section>` : ''}
-    <button class="btn primary big" data-action="new-entry">+ Ny timeføring</button>`;
+    </section>` : ''}`;
 }
 
 /* --- Uke --- */

@@ -84,6 +84,11 @@ export async function kjorTimeTest() {
   kall.length = 0;
   const timer = await kallApi('/api/infrakit/hours', { token });
   const maskiner = await kallApi('/api/infrakit/machines', { token });
+  // Per prosjekt: skal gi kun det prosjektets maskiner, med faa kall
+  kall.length = 0;
+  const prosjekter = await kallApi('/api/infrakit/projects', { token });
+  const kunP2 = await kallApi('/api/infrakit/hours?projectId=2', { token });
+  const kallPerProsjekt = kall.length;
 
   window.fetch = ekte;
   const dager = timer.data?.days || [];
@@ -95,5 +100,8 @@ export async function kjorTimeTest() {
     notatLastebil: dager.find((d) => d.machine === 'Lastebil B')?.note,
     notatGraver: dager.find((d) => d.machine === 'Gravemaskin A')?.note,
     prosjekterIMaskinliste: maskiner.data?.projects,
+    prosjektrute: prosjekter.data?.projects,
+    kallPerProsjekt,
+    kunProsjekt2: (kunP2.data?.days || []).map((d) => d.machine + ' (' + d.project + ')'),
   };
 }

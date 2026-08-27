@@ -239,7 +239,14 @@ async function buildMachines(token) {
   });
 }
 
-async function buildHours(token) {
+async function hentProsjekter(token) {
+  const pr = await ik('/ajax_projects.json', token);
+  return (Array.isArray(pr) ? pr : pr.projects || []).filter((p) => p && p.name);
+}
+
+// Med kunProsjektId hentes bare ett prosjekt - da holder appen seg godt innenfor
+// kallgrensen selv med mange maskiner, og henter prosjektene hver for seg.
+async function buildHours(token, kunProsjektId) {
   const endMs = Date.now() + 86400000;
   const startMs = endMs - 15 * 86400000;
   const days = [];
@@ -248,9 +255,9 @@ async function buildHours(token) {
   const budsjett = () => kall < MAKS_KALL;
 
   // Kjoretoylista er bundet til ett prosjekt om gangen, saa vi spoer per prosjekt.
-  const pr = await ik('/ajax_projects.json', token);
+  let plist = await hentProsjekter(token);
   kall++;
-  const plist = Array.isArray(pr) ? pr : pr.projects || [];
+  if (kunProsjektId) plist = plist.filter((p) => String(p.id) === String(kunProsjektId));
   const kjoretoy = new Map(); // id -> kjoretoy + prosjekt
 
   for (const p of plist) {
@@ -611,15 +618,25 @@ export default {
         });
       }
 
-      if (sti === '/api/infrakit/machines' || sti === '/api/infrakit/hours') {
+      if (sti === '/api/infrakit/machines' || sti === '/api/infrakit/hours' || sti === '/api/infrakit/projects') {
         if (!oekt.bedrift.refresh_token) {
           return json({ error: 'Bedriften er ikke koblet til Infrakit ennaa' }, 409);
         }
         try {
           const token = await accessToken(env, oekt.bedrift);
-          const body = sti.endsWith('machines')
-            ? await medCache(oekt.bedrift.id, 'machines', 10 * 60000, () => buildMachines(token))
-            : await medCache(oekt.bedrift.id, 'hours', 5 * 60000, () => buildHours(token));
+          let body;
+          if (sti.endsWith('machines')) {
+            body = await medCache(oekt.bedrift.id, 'machines', 10 * 60000, () => buildMachines(token));
+          } else if (sti.endsWith('projects')) {
+            body = await medCache(oekt.bedrift.id, 'projects', 10 * 60000, async () => {
+              const plist = await hentProsjekter(token);
+              return JSON.stringify({ projects: plist.map((p) => ({ id: p.id, name: String(p.name) })) });
+            });
+          } else {
+            const pid = url.searchParams.get('projectId');
+            body = await medCache(oekt.bedrift.id, 'hours' + (pid ? ':' + pid : ''), 5 * 60000,
+              () => buildHours(token, pid));
+          }
           return new Response(body, { headers: cors });
         } catch (err) {
           return json({ error: 'Infrakit-kallet feilet: ' + (err.message || err) }, 502);

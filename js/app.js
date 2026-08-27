@@ -838,13 +838,37 @@ async function fetchInfrakitStatus() {
   if (ui.tab === 'more') render();
 }
 
+// Timene hentes per prosjekt, ellers sprenger store maskinparker Cloudflares
+// grense på 50 utgående kall per forespørsel. Puljer på tre for fartens skyld.
 async function fetchMachineHours(showResult) {
   if (!auth()) return;
   try {
-    const data = await api('api/infrakit/hours');
-    const days = Array.isArray(data) ? data : data.days;
-    const changed = Array.isArray(days) ? store.syncMachineHours(days) : 0;
-    if (showResult) alert(changed ? `Maskintimer oppdatert (${changed} endring${changed === 1 ? '' : 'er'}).` : 'Ingen nye maskintimer.');
+    let dager = [];
+    let prosjekter = [];
+    try {
+      const pr = await api('api/infrakit/projects');
+      if (Array.isArray(pr.projects)) prosjekter = pr.projects;
+    } catch { /* eldre server – faller tilbake til ett samlet kall */ }
+
+    if (prosjekter.length) {
+      store.ensureProjects(prosjekter.map((p) => p.name));
+      for (let i = 0; i < prosjekter.length; i += 3) {
+        const svar = await Promise.all(prosjekter.slice(i, i + 3).map((p) =>
+          api('api/infrakit/hours?projectId=' + encodeURIComponent(p.id)).catch(() => null)
+        ));
+        for (const s of svar) if (s && Array.isArray(s.days)) dager.push(...s.days);
+      }
+    } else {
+      const data = await api('api/infrakit/hours');
+      if (Array.isArray(data.days)) dager = data.days;
+    }
+
+    const changed = store.syncMachineHours(dager);
+    if (showResult) {
+      alert(changed
+        ? `Maskintimer oppdatert – ${dager.length} maskindager fra ${prosjekter.length || 1} prosjekt${prosjekter.length === 1 ? '' : 'er'}.`
+        : 'Ingen nye maskintimer.');
+    }
   } catch (err) {
     if (showResult) alert(String(err.message || err));
   }

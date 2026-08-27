@@ -863,6 +863,9 @@ async function fetchInfrakitStatus() {
 // grense på 50 utgående kall per forespørsel. Puljer på tre for fartens skyld.
 async function fetchMachineHours(showResult) {
   if (!auth()) return;
+  // Aldri to synk-runder samtidig - aktivt prosjekt i Infrakit er delt tilstand
+  if (ui.henterTimer) return;
+  ui.henterTimer = true;
   try {
     let dager = [];
     let prosjekter = [];
@@ -909,11 +912,12 @@ async function fetchMachineHours(showResult) {
         : `Fant ingen maskintimer${feilTekst}.`);
     }
   } catch (err) {
-    ui.synkStatus = '';
     if (showResult) alert(String(err.message || err));
+  } finally {
+    ui.henterTimer = false;
+    ui.synkStatus = '';
+    if (ui.tab === 'more') render();
   }
-  ui.synkStatus = '';
-  if (ui.tab === 'more') render();
 }
 
 function downloadExport() {

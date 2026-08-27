@@ -31,7 +31,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 4;
+const VERSJON = 5;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -274,36 +274,57 @@ async function buildHours(token, kunProsjektId) {
   } catch { /* klarer oss uten */ }
 
   const grense = Date.now() - 16 * 86400000;
-  const vlist = [];
+  const sjekkLaas = async (pid) => {
+    // Aktivt prosjekt er delt per Infrakit-bruker. Bytter en annen synk-runde
+    // prosjekt midt i vaar henting, faar vi tomme kalendersvar - da maa vi
+    // avbryte i stedet for aa levere "tomt" som sannhet.
+    const cur = await ik('/ajax_current_project.json', token);
+    kall++;
+    if (String(cur && cur.id) !== String(pid)) {
+      const feil = new Error('Prosjektlaasen var opptatt (en annen synk paagaar) - prov igjen om litt');
+      feil.laas = true;
+      throw feil;
+    }
+  };
 
-  for (const p of plist) {
-    if (!budsjett()) break;
-    try {
-      if (String(p.id) !== String(opprinnelig)) {
-        await ikPost('/ajax_change_project.json?projectId=' + p.id, token);
+  try {
+    for (const p of plist) {
+      if (!budsjett()) break;
+      try {
+        if (String(p.id) !== String(opprinnelig)) {
+          await ikPost('/ajax_change_project.json?projectId=' + p.id, token);
+          kall++;
+        }
+        await sjekkLaas(p.id);
+        const veh = await ik('/ajax_vehicles.json?projectId=' + p.id, token);
         kall++;
+        const aktive = (veh.vehicles || [])
+          .filter((v) => v.id && (Number(v.worktimeLastWeek) > 0 || Number(v.lastReport) > grense || Number(v.lastActive) > grense))
+          .sort((a, b) => (Number(b.worktimeLastWeek) || 0) - (Number(a.worktimeLastWeek) || 0));
+        const utkast = [];
+        for (const v of aktive) {
+          if (!budsjett()) break;
+          await samleTimer(v, p, utkast);
+        }
+        // Bekreft at ingen byttet prosjekt mens vi hentet - foerst da er
+        // dagene trygge aa levere (ogsaa naar de er tomme)
+        if (aktive.length) await sjekkLaas(p.id);
+        days.push(...utkast);
+      } catch (feil) {
+        if (feil && feil.laas && kunProsjektId) throw feil;
+        /* ellers: hopp over prosjektet */
       }
-      const veh = await ik('/ajax_vehicles.json?projectId=' + p.id, token);
-      kall++;
-      const aktive = (veh.vehicles || [])
-        .filter((v) => v.id && (Number(v.worktimeLastWeek) > 0 || Number(v.lastReport) > grense || Number(v.lastActive) > grense))
-        .sort((a, b) => (Number(b.worktimeLastWeek) || 0) - (Number(a.worktimeLastWeek) || 0));
-      for (const v of aktive) {
-        vlist.push({ v, projectName: String(p.name || ''), projectUuid: String(p.uuid || '') });
-        if (!budsjett()) break;
-        await samleTimer(v, p);
-      }
-    } catch { /* hopp over prosjekt uten tilgang */ }
-  }
-
-  // Sett tilbake prosjektet brukeren hadde aktivt i Infrakit
-  if (opprinnelig && plist.some((p) => String(p.id) !== String(opprinnelig))) {
-    try { await ikPost('/ajax_change_project.json?projectId=' + opprinnelig, token); } catch { /* best effort */ }
+    }
+  } finally {
+    // Sett alltid tilbake prosjektet brukeren hadde aktivt i Infrakit
+    if (opprinnelig && plist.some((p) => String(p.id) !== String(opprinnelig))) {
+      try { await ikPost('/ajax_change_project.json?projectId=' + opprinnelig, token); } catch { /* best effort */ }
+    }
   }
 
   return JSON.stringify({ updated: iso(), days });
 
-  async function samleTimer(v, p) {
+  async function samleTimer(v, p, ut) {
     const post = { v, projectName: String(p.name || ''), projectUuid: String(p.uuid || '') };
     try {
       const per = new Map();
@@ -424,7 +445,7 @@ async function buildHours(token, kunProsjektId) {
         }
         let note = linjer.join('\n').trim();
         if (note.length > 900) note = note.slice(0, 899) + '\u2026';
-        days.push({
+        ut.push({
           date: dag,
           machine: String(v.name),
           project: projName,

@@ -34,7 +34,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 9;
+const VERSJON = 10;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -271,6 +271,18 @@ const osloFmt = new Intl.DateTimeFormat('sv-SE', {
 const osloDate = (ms) => osloFmt.format(new Date(ms));
 const timerTekst = (ms) => String(Math.round((ms / 3600000) * 10) / 10).replace('.', ',') + ' t';
 
+// Tidsstempler fra logpoints-API-et kommer i praksis som tall-liste
+// [aar, mnd, dag, time, min, sek] i UTC - ikke ISO-streng som
+// spesifikasjonen sier. Taal begge deler.
+function tidTilMs(t) {
+  if (Array.isArray(t)) {
+    if (!t.length || !t[0]) return 0;
+    return Date.UTC(t[0], (t[1] || 1) - 1, t[2] || 1, t[3] || 0, t[4] || 0, t[5] || 0);
+  }
+  const n = Date.parse(t);
+  return Number.isFinite(n) ? n : 0;
+}
+
 async function buildMachines(token) {
   const pr = await ik('/v1/projects', token);
   const plist = Array.isArray(pr) ? pr : pr.projects || [];
@@ -492,7 +504,7 @@ async function buildHours(token, kunProsjektId) {
                 if (lp.voided || !lp.measured) continue;
                 const eq = lp.meta && lp.meta.instrument ? String(lp.meta.instrument.equipmentUuid || '') : '';
                 if (!eq) continue;
-                const naar = Date.parse(lp.measured);
+                const naar = tidTilMs(lp.measured);
                 if (!naar) continue;
                 const dag = osloDate(naar);
                 if (!map.punkter.has(eq)) map.punkter.set(eq, new Map());

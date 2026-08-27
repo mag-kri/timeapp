@@ -107,17 +107,19 @@ export async function kjorTimeTest() {
     }
     if (url.includes('/logpoints')) {
       // Som i Infrakit: as-built-punkter med kode og maskin-attribusjon.
+      // 'measured' kommer i praksis som [aar, mnd, dag, t, m, s] i UTC.
       // Ett makulert, ett fra fremmed maskin og ett fra i gaar skal vekk.
-      const igaar = new Date(Date.parse(idag) - 86400000).toISOString().slice(0, 10);
+      const [aar, mnd, dag] = idag.split('-').map(Number);
+      const igaar = new Date(Date.parse(idag) - 86400000).toISOString().slice(0, 10).split('-').map(Number);
       return new Response(JSON.stringify({ status: true, last: true, logpoints: [
-        { measured: idag + 'T07:15:00+00:00', voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
-        { measured: idag + 'T08:20:00+00:00', voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
-        { measured: idag + 'T09:05:00+00:00', voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: [aar, mnd, dag, 5, 15, 0], voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: [aar, mnd, dag, 6, 20, 12], voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: [aar, mnd, dag, 7, 5, 45], voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
         { measured: idag + 'T10:00:00+00:00', voided: null, meta: { code: 'V-KUM', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
-        { measured: idag + 'T10:30:00+00:00', voided: null, meta: { code: '', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
-        { measured: idag + 'T11:00:00+00:00', voided: '2026-01-01T00:00:00+00:00', meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
-        { measured: idag + 'T11:30:00+00:00', voided: null, meta: { code: 'ANNEN', instrument: { equipmentUuid: 'm99', type: 'ROVER_GPS' } } },
-        { measured: igaar + 'T10:00:00+00:00', voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: [aar, mnd, dag, 8, 30, 0], voided: null, meta: { code: '', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: [aar, mnd, dag, 9, 0, 0], voided: [2026, 1, 1, 0, 0, 0], meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: [aar, mnd, dag, 9, 30, 0], voided: null, meta: { code: 'ANNEN', instrument: { equipmentUuid: 'm99', type: 'ROVER_GPS' } } },
+        { measured: [igaar[0], igaar[1], igaar[2], 10, 0, 0], voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
       ] }), { status: 200 });
     }
     if (url.includes('/areas')) return new Response(JSON.stringify({ areas: [{ uuid: 'a1', title: 'Brudd' }, { uuid: 'a2', title: 'Deponi' }] }), { status: 200 });

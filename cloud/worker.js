@@ -31,7 +31,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 3;
+const VERSJON = 4;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -308,7 +308,7 @@ async function buildHours(token, kunProsjektId) {
     try {
       const per = new Map();
       const bucket = (dag) => {
-        if (!per.has(dag)) per.set(dag, { ms: 0, first: null, last: null, turer: 0, km: 0, mod: new Map(), mat: new Map(), ruter: new Map() });
+        if (!per.has(dag)) per.set(dag, { ms: 0, first: null, last: null, turer: 0, km: 0, pelMin: null, pelMaks: null, mod: new Map(), mat: new Map(), ruter: new Map() });
         return per.get(dag);
       };
 
@@ -324,6 +324,16 @@ async function buildHours(token, kunProsjektId) {
         const til = String(e.end).slice(11, 16);
         if (!d.first || fra < d.first) d.first = fra;
         if (!d.last || til > d.last) d.last = til;
+        // Tooltip-en baerer pelnummer og modellnavn for maskinstyrte maskiner
+        const tt = String(e.tooltip || '');
+        for (const treff of tt.matchAll(/pel\.nr\.\s*:\s*(\d+)/gi)) {
+          const pel = Number(treff[1]);
+          if (!pel) continue;
+          if (d.pelMin === null || pel < d.pelMin) d.pelMin = pel;
+          if (d.pelMaks === null || pel > d.pelMaks) d.pelMaks = pel;
+        }
+        const mod = tt.match(/Modell\s*:\s*([^<]+)/i);
+        if (mod && mod[1].trim()) d.mod.set(mod[1].trim(), true);
       }
 
       try {
@@ -331,7 +341,12 @@ async function buildHours(token, kunProsjektId) {
         const mev = await ik(`/ajax_calendar_active_model_events.json?vehicleId=${v.id}&start=${startMs}&end=${endMs}`, token);
         kall++;
         for (const m of mev.events || []) {
-          const navn = String(m.title || '').trim();
+          // Modellnavnet ligger i tooltip-en naar title er tom (gjelder gravere)
+          let navn = String(m.title || '').trim();
+          if (!navn) {
+            const b = String(m.tooltip || '').match(/<b>([^<]+)<\/b>/i);
+            navn = b ? b[1].trim() : '';
+          }
           if (!m.start || !navn) continue;
           const dag = String(m.start).slice(0, 10);
           if (per.has(dag)) per.get(dag).mod.set(navn, true);
@@ -391,6 +406,7 @@ async function buildHours(token, kunProsjektId) {
         const deler = [];
         if (d.turer > 0) deler.push(d.turer === 1 ? '1 tur' : d.turer + ' turer');
         if (d.km >= 1) deler.push(Math.round(d.km) + ' km');
+        if (d.pelMaks) deler.push(d.pelMin === d.pelMaks ? 'pel ' + d.pelMaks : 'pel ' + d.pelMin + '-' + d.pelMaks);
         if (deler.length) linjer.push(deler.join(SEP));
         if (d.mod.size) {
           linjer.push('', 'Modeller:');

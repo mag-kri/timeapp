@@ -1,9 +1,11 @@
-// Timeapp skyproxy – Cloudflare Worker
+// Timeapp skyproxy - Cloudflare Worker
 // Samme ruter som scripts/serve.ps1: /api/infrakit/{status,machines,hours}
-// Hemmeligheter (Settings → Variables and Secrets, alle tre som "Secret"):
-//   INFRAKIT_USER  – Infrakit-brukernavn (e-post)
-//   INFRAKIT_PASS  – Infrakit-passord (workeren logger inn og fornyer nøkkelen selv)
-//   APP_KEY        – selvvalgt tilgangskode som appen må sende (X-Timeapp-Key)
+// Hemmeligheter (Settings -> Variables and Secrets, alle tre som "Secret"):
+//   INFRAKIT_USER  - Infrakit-brukernavn (e-post)
+//   INFRAKIT_PASS  - Infrakit-passord (workeren logger inn og fornyer token selv)
+//   APP_KEY        - selvvalgt tilgangskode som appen skal sende (X-Timeapp-Key)
+// Merk: kildekoden holdes ren ASCII (\u-escapes for spesialtegn) slik at den
+// taaler kopiering mellom verktoey med ulike tegnsett.
 
 const IK = 'https://app.infrakit.com/kuura';
 const ALLOWED_ORIGINS = ['https://mag-kri.github.io', 'http://localhost:8613'];
@@ -12,9 +14,9 @@ let tokenCache = { key: null, expire: 0 };
 let machinesCache = { ts: 0, body: null };
 let hoursCache = { ts: 0, body: null };
 
-const SEP = ' · ';      // midtprikk
-const ARROW = ' → ';    // pil
-const BULLET = '• ';    // punktmerke
+const SEP = ' \u00B7 ';   // midtprikk
+const ARROW = ' \u2192 '; // pil
+const BULLET = '\u2022 '; // punktmerke
 
 async function getToken(env) {
   const now = Date.now();
@@ -112,7 +114,7 @@ async function buildHours(env) {
           try {
             const ar = await ik('/v1/project/' + pu + '/areas', token);
             for (const a of ar.areas || []) if (a.uuid && a.title) map.set(String(a.uuid), String(a.title).trim());
-          } catch { /* områder er valgfritt */ }
+          } catch { /* omrader er valgfritt */ }
           areaMaps.set(pu, map);
         }
         const amap = areaMaps.get(pu);
@@ -165,7 +167,7 @@ async function buildHours(env) {
           }
         }
         let note = linjer.join('\n').trim();
-        if (note.length > 900) note = note.slice(0, 899) + '…';
+        if (note.length > 900) note = note.slice(0, 899) + '\u2026';
         days.push({
           date: dag,
           machine: String(v.name),
@@ -176,7 +178,7 @@ async function buildHours(env) {
           end: d.last ? `${dag}T${d.last}:00` : null,
         });
       }
-    } catch { /* hopp over kjøretøy som feiler */ }
+    } catch { /* hopp over kjoretoy som feiler */ }
   }
 
   const body = JSON.stringify({ updated: new Date().toISOString(), days });

@@ -565,7 +565,17 @@ function maybePrefillMachineHours() {
       hint.hidden = false;
     }
   } else if (hint) {
-    hint.textContent = 'Ingen Infrakit-timer registrert på denne maskinen denne dagen.';
+    // Fortell hvilke dager maskinen faktisk har timer, så det er lett å finne dem
+    const andre = state.entries
+      .filter((e) => e.machine === machine && e.id.startsWith('ik-'))
+      .map((e) => e.date)
+      .sort();
+    if (andre.length) {
+      const vis = andre.slice(-5).map((dato) => d.dayMonth(dato)).join(', ');
+      hint.innerHTML = `Ingen Infrakit-timer denne dagen. Maskinen har timer ${andre.length > 5 ? 'bl.a. ' : ''}${esc(vis)}.`;
+    } else {
+      hint.textContent = 'Ingen Infrakit-timer registrert på denne maskinen. Prøv «Oppdater maskiner og timer» under Mer.';
+    }
     hint.hidden = false;
   }
 }

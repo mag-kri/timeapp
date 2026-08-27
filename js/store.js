@@ -228,10 +228,16 @@ const slug = (s) => String(s).toLowerCase().replace(/[^a-z0-9æøå]+/g, '-');
 // Idempotent: samme dag + maskin + prosjekt oppdateres i stedet for å dupliseres,
 // og for datoene fila dekker er fila fasit – maskinføringer som er borte fra
 // fila fjernes også fra appen.
-export function syncMachineHours(days) {
+// opts.scopeProjects: navn på prosjektene som faktisk ble hentet. Er den satt,
+// ryddes kun i disse prosjektene – føringer fra prosjekter vi ikke fikk svar
+// for blir stående urørt.
+export function syncMachineHours(days, opts = {}) {
   let changed = 0;
   const seenIds = new Set();
   const seenDates = new Set();
+  const scope = Array.isArray(opts.scopeProjects)
+    ? new Set(opts.scopeProjects.map((n) => String(n).trim().toLowerCase()))
+    : null;
   for (const item of days) {
     if (!item || !/^\d{4}-\d{2}-\d{2}$/.test(item.date || '')) continue;
     if (typeof item.machine !== 'string' || !item.machine.trim()) continue;
@@ -285,9 +291,13 @@ export function syncMachineHours(days) {
     }
   }
   const before = state.entries.length;
-  state.entries = state.entries.filter(
-    (e) => !(e.machine && e.id.startsWith('ik-') && seenDates.has(e.date) && !seenIds.has(e.id))
-  );
+  state.entries = state.entries.filter((e) => {
+    const foreldet = e.machine && e.id.startsWith('ik-') && seenDates.has(e.date) && !seenIds.has(e.id);
+    if (!foreldet) return true;
+    if (!scope) return false;
+    const p = e.projectId ? state.projects.find((x) => x.id === e.projectId) : null;
+    return !scope.has(p ? p.name.trim().toLowerCase() : '');
+  });
   changed += before - state.entries.length;
   if (changed) commit();
   return changed;

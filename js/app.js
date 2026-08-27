@@ -850,24 +850,36 @@ async function fetchMachineHours(showResult) {
       if (Array.isArray(pr.projects)) prosjekter = pr.projects;
     } catch { /* eldre server – faller tilbake til ett samlet kall */ }
 
+    let hentet = [];
+    let feilet = 0;
     if (prosjekter.length) {
       store.ensureProjects(prosjekter.map((p) => p.name));
       for (let i = 0; i < prosjekter.length; i += 3) {
-        const svar = await Promise.all(prosjekter.slice(i, i + 3).map((p) =>
-          api('api/infrakit/hours?projectId=' + encodeURIComponent(p.id)).catch(() => null)
+        const pulje = prosjekter.slice(i, i + 3);
+        const svar = await Promise.all(pulje.map((p) =>
+          api('api/infrakit/hours?projectId=' + encodeURIComponent(p.id))
+            .then((s) => ({ p, s })).catch(() => ({ p, s: null }))
         ));
-        for (const s of svar) if (s && Array.isArray(s.days)) dager.push(...s.days);
+        for (const { p, s } of svar) {
+          if (s && Array.isArray(s.days)) {
+            dager.push(...s.days);
+            hentet.push(p.name);
+          } else {
+            feilet++;
+          }
+        }
       }
     } else {
       const data = await api('api/infrakit/hours');
       if (Array.isArray(data.days)) dager = data.days;
     }
 
-    const changed = store.syncMachineHours(dager);
+    const changed = store.syncMachineHours(dager, hentet.length ? { scopeProjects: hentet } : {});
     if (showResult) {
-      alert(changed
-        ? `Maskintimer oppdatert – ${dager.length} maskindager fra ${prosjekter.length || 1} prosjekt${prosjekter.length === 1 ? '' : 'er'}.`
-        : 'Ingen nye maskintimer.');
+      const feilTekst = feilet ? ` (${feilet} prosjekt${feilet === 1 ? '' : 'er'} svarte ikke)` : '';
+      alert(dager.length
+        ? `Maskintimer oppdatert – ${dager.length} maskindager fra ${hentet.length || 1} prosjekt${hentet.length === 1 ? '' : 'er'}${feilTekst}.`
+        : `Fant ingen maskintimer${feilTekst}.`);
     }
   } catch (err) {
     if (showResult) alert(String(err.message || err));

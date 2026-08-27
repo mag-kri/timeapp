@@ -34,7 +34,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 8;
+const VERSJON = 9;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -379,7 +379,7 @@ async function buildHours(token, kunProsjektId) {
     try {
       const per = new Map();
       const bucket = (dag) => {
-        if (!per.has(dag)) per.set(dag, { ms: 0, first: null, last: null, turer: 0, km: 0, pelMin: null, pelMaks: null, mod: new Map(), modUten: { ms: 0, fra: null }, mat: new Map(), ruter: new Map(), koder: null });
+        if (!per.has(dag)) per.set(dag, { ms: 0, first: null, last: null, turer: 0, km: 0, pelMin: null, pelMaks: null, mod: new Map(), modTips: new Map(), mat: new Map(), ruter: new Map(), koder: null });
         return per.get(dag);
       };
 
@@ -403,17 +403,56 @@ async function buildHours(token, kunProsjektId) {
           if (d.pelMin === null || pel < d.pelMin) d.pelMin = pel;
           if (d.pelMaks === null || pel > d.pelMaks) d.pelMaks = pel;
         }
-        // Tid fordeles per modell med foerste starttid - og tid KJOERT UTEN
-        // MODELL noteres eksplisitt, siden det ofte er et avvik for
-        // maskinstyrte maskiner
-        const mod = tt.match(/Modell\s*:\s*([^<]*)/i);
-        if (mod) {
+        // Noen tooltips baerer ogsaa modellnavn - brukes kun som reserve
+        // dersom modell-hendelsene under ikke gir noe
+        const mod = tt.match(/Modell\s*:\s*([^<]+)/i);
+        if (mod && mod[1].trim()) {
           const navn = mod[1].trim();
-          const maal = navn ? (d.mod.get(navn) || { ms: 0, fra: null }) : d.modUten;
+          const maal = d.modTips.get(navn) || { ms: 0, fra: null };
           maal.ms += ms;
           if (!maal.fra || fra < maal.fra) maal.fra = fra;
-          if (navn) d.mod.set(navn, maal);
+          d.modTips.set(navn, maal);
         }
+      }
+
+      // Modell-hendelsene er fasiten for hvilke flater maskinen har kjoert paa:
+      // navnet ligger i <b>...</b> naar title er tom, tidsrommet i feltene
+      // eller i tooltip-teksten, og pelnummer i tooltip-en
+      if (Number(v.type) !== 9 && per.size && budsjett()) {
+        try {
+          const mev = await ik(`/ajax_calendar_active_model_events.json?vehicleId=${v.id}&start=${startMs}&end=${endMs}`, token);
+          kall++;
+          for (const m of mev.events || []) {
+            let navn = String(m.title || '').trim();
+            if (!navn) {
+              const b = String(m.tooltip || '').match(/<b>([^<]+)<\/b>/i);
+              navn = b ? b[1].trim() : '';
+            }
+            if (!m.start || !navn) continue;
+            const dag = String(m.start).slice(0, 10);
+            if (!per.has(dag)) continue;
+            const d = per.get(dag);
+            const fra = String(m.start).slice(11, 16);
+            let ms = 0;
+            if (m.end) {
+              ms = new Date(String(m.end).replace(' ', 'T')) - new Date(String(m.start).replace(' ', 'T'));
+            } else {
+              const rom = String(m.tooltip || '').match(/(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})/);
+              if (rom) ms = new Date(`${dag}T${rom[2].padStart(5, '0')}`) - new Date(`${dag}T${rom[1].padStart(5, '0')}`);
+            }
+            if (!(ms > 0)) ms = 0;
+            const maal = d.mod.get(navn) || { ms: 0, fra: null };
+            maal.ms += ms;
+            if (!maal.fra || (fra && fra < maal.fra)) maal.fra = fra;
+            d.mod.set(navn, maal);
+            for (const treff of String(m.tooltip || '').matchAll(/pel\.nr\.\s*:\s*(\d+)/gi)) {
+              const pel = Number(treff[1]);
+              if (!pel) continue;
+              if (d.pelMin === null || pel < d.pelMin) d.pelMin = pel;
+              if (d.pelMaks === null || pel > d.pelMaks) d.pelMaks = pel;
+            }
+          }
+        } catch { /* modeller er valgfritt */ }
       }
 
       const pu = post.projectUuid || (v.activeProject ? String(v.activeProject.uuid) : '');
@@ -503,15 +542,20 @@ async function buildHours(token, kunProsjektId) {
         if (antallPunkter) deler.push(antallPunkter === 1 ? '1 punkt' : antallPunkter + ' punkter');
         if (deler.length) linjer.push(deler.join(SEP));
         const erLastebil = Number(v.type) === 9;
-        const visUtenModell = d.modUten.ms > 60000 && !erLastebil;
+        if (!d.mod.size && d.modTips.size) d.mod = d.modTips;
+        let kjentMs = 0;
+        for (const m of d.mod.values()) kjentMs += m.ms;
+        // Tid uten modell = arbeidstid som ikke dekkes av noen modell
+        const utenMs = Math.max(0, d.ms - kjentMs);
+        const visUtenModell = !erLastebil && utenMs > 15 * 60000;
         if (d.mod.size || visUtenModell) {
           linjer.push('', 'Modeller:');
           const kronologisk = [...d.mod].sort((a, b) => String(a[1].fra || '99').localeCompare(String(b[1].fra || '99')));
           for (const [navn, m] of kronologisk) {
-            linjer.push(`${BULLET}${m.fra ? m.fra + ' ' : ''}${navn}${SEP}${timerTekst(m.ms)}`);
+            linjer.push(`${BULLET}${m.fra ? m.fra + ' ' : ''}${navn}${m.ms ? SEP + timerTekst(m.ms) : ''}`);
           }
           if (visUtenModell) {
-            linjer.push(`${BULLET}${d.modUten.fra ? d.modUten.fra + ' ' : ''}Uten modell${SEP}${timerTekst(d.modUten.ms)}`);
+            linjer.push(`${BULLET}Uten modell${SEP}${timerTekst(utenMs)}`);
           }
         }
         if (antallPunkter) {

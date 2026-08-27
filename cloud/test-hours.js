@@ -90,10 +90,19 @@ export async function kjorTimeTest() {
       const vid = Number(new URL(url).searchParams.get('vehicleId'));
       const hjemme = { 11: 1, 22: 2, 33: 3 }[vid];
       if (hjemme !== aktivtProsjekt) return new Response(JSON.stringify({ events: [] }), { status: 200 });
-      // Som i Infrakit: tooltip baerer pelnummer og modellnavn - og en oekt UTEN modell
+      // Som i Infrakit: arbeidsoekter uten modell- eller pelinfo i tooltip-en
       return new Response(JSON.stringify({ events: [
-        { start: idag + ' 08:00', end: idag + ' 14:00', title: '', tooltip: '<b>Maskin</b> 08:00 - 14:00<br>Foerste pel.nr.:1200<br>Siste pel.nr.:1450<br>Modell:Traubunn P200' },
-        { start: idag + ' 14:00', end: idag + ' 16:00', title: '', tooltip: '<b>Maskin</b> 14:00 - 16:00<br>Foerste pel.nr.:0<br>Siste pel.nr.:0<br>Modell:' },
+        { start: idag + ' 08:00', end: idag + ' 14:00', title: '', tooltip: '<b>Maskin</b> 08:00 - 14:00' },
+        { start: idag + ' 14:00', end: idag + ' 16:00', title: '', tooltip: '<b>Maskin</b> 14:00 - 16:00' },
+      ] }), { status: 200 });
+    }
+    if (url.includes('/ajax_calendar_active_model_events')) {
+      // Modellnavn i <b>, pelnummer i tooltip; ett event mangler end-felt
+      const vid = Number(new URL(url).searchParams.get('vehicleId'));
+      if (vid !== 11) return new Response(JSON.stringify({ events: [] }), { status: 200 });
+      return new Response(JSON.stringify({ events: [
+        { start: idag + ' 08:00', end: idag + ' 14:00', title: '', tooltip: '<b>Traubunn P200</b><br/>08:00 - 14:00<br>Foerste pel.nr.:1200<br>Siste pel.nr.:1450' },
+        { start: idag + ' 14:00', title: '', tooltip: '<b>Grusdekke</b><br/>14:00 - 15:00<br>' },
       ] }), { status: 200 });
     }
     if (url.includes('/logpoints')) {
@@ -162,6 +171,16 @@ export async function kjorTimeTest() {
       const n = dager.find((d) => d.machine === 'Gravemaskin A')?.note || '';
       return n.includes('5 punkter') && n.includes('SOK') && n.includes('3 stk') && n.includes('V-KUM') && n.includes('(uten kode)') && !n.includes('ANNEN');
     })(),
+    modellerRett: (() => {
+      const n = dager.find((d) => d.machine === 'Gravemaskin A')?.note || '';
+      return n.includes('pel 1200-1450') && n.includes('08:00 Traubunn P200 · 6 t')
+        && n.includes('14:00 Grusdekke · 1 t') && n.includes('Uten modell · 1 t');
+    })(),
+    lastebilUtenModellstoy: (() => {
+      const n = dager.find((d) => d.machine === 'Lastebil B')?.note || '';
+      return !n.includes('Modeller') && !n.includes('Uten modell');
+    })(),
+    modellkallKunGraver: !kall.some((k) => k.includes('active_model_events') && k.includes('vehicleId=22')),
     prosjekterIMaskinliste: maskiner.data?.projects,
     prosjektrute: prosjekter.data?.projects,
     kallPerProsjekt,

@@ -1,36 +1,131 @@
-// Timeapp skyproxy - Cloudflare Worker
-// Samme ruter som scripts/serve.ps1: /api/infrakit/{status,machines,hours}
-// Hemmeligheter (Settings -> Variables and Secrets, alle tre som "Secret"):
-//   INFRAKIT_USER  - Infrakit-brukernavn (e-post)
-//   INFRAKIT_PASS  - Infrakit-passord (workeren logger inn og fornyer token selv)
-//   APP_KEY        - selvvalgt tilgangskode som appen skal sende (X-Timeapp-Key)
-// Merk: kildekoden holdes ren ASCII (\u-escapes for spesialtegn) slik at den
-// taaler kopiering mellom verktoey med ulike tegnsett.
+// Timeapp skyproxy - Cloudflare Worker (flerselskaps)
+//
+// Hver bedriftsadmin kobler til sin EGEN Infrakit-bruker en gang. Proxyen
+// lagrer kun et fornybart refresh-token (kryptert), aldri passord, og hver
+// bedrift har sin egen tilgangskode - data krysser aldri mellom bedrifter.
+//
+// Ruter:
+//   POST /api/infrakit/connect   (admin: oppsettkode + Infrakit-innlogging -> tilgangskode)
+//   GET  /api/infrakit/status    (X-Timeapp-Key: hvem er tilkoblet)
+//   GET  /api/infrakit/machines  (X-Timeapp-Key: bedriftens maskiner)
+//   GET  /api/infrakit/hours     (X-Timeapp-Key: bedriftens maskintimer)
+//
+// Bindinger som maa settes opp i Cloudflare:
+//   KV-namespace bundet som  TIMEAPP_KV
+//   Secret  ENC_KEY    - base64 av 32 tilfeldige bytes (krypterer refresh-tokens)
+//   Secret  SETUP_KEY  - oppsettkode som admin maa oppgi for aa koble til
+//
+// Merk: kildekoden holdes ren ASCII slik at den taaler kopiering mellom
+// verktoy med ulike tegnsett.
 
+const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
 const ALLOWED_ORIGINS = ['https://mag-kri.github.io', 'http://localhost:8613'];
-
-let tokenCache = { key: null, expire: 0 };
-let machinesCache = { ts: 0, body: null };
-let hoursCache = { ts: 0, body: null };
+const KODE_ALFABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // uten forvekslingstegn
 
 const SEP = ' \u00B7 ';   // midtprikk
 const ARROW = ' \u2192 '; // pil
 const BULLET = '\u2022 '; // punktmerke
 
-async function getToken(env) {
-  const now = Date.now();
-  if (tokenCache.key && tokenCache.expire > now + 60000) return tokenCache.key;
-  const form = new URLSearchParams({ username: env.INFRAKIT_USER, password: env.INFRAKIT_PASS });
-  const r = await fetch(IK + '/apilogin.json', { method: 'POST', body: form });
-  const j = await r.json().catch(() => ({}));
-  if (!j.apiKey) throw new Error('Infrakit-innlogging feilet');
-  tokenCache = { key: j.apiKey, expire: Number(j.expire) || now + 6 * 86400000 };
-  return tokenCache.key;
+// Mellomlagring per bedrift (nullstilles naar workeren resirkuleres)
+const tokenCache = new Map(); // kode -> { accessToken, expiresAt }
+const dataCache = new Map();  // kode + ':' + type -> { ts, body }
+
+/* ---------- Kryptering av refresh-tokens ---------- */
+
+function bytesTilB64(bytes) {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
 }
 
-async function ik(path, token) {
-  const r = await fetch(IK + path, { headers: { Authorization: 'Bearer ' + token } });
+function b64TilBytes(b64) {
+  const bin = atob(b64);
+  const ut = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) ut[i] = bin.charCodeAt(i);
+  return ut;
+}
+
+async function encKey(env) {
+  if (!env.ENC_KEY) throw new Error('ENC_KEY mangler i workerens hemmeligheter');
+  return crypto.subtle.importKey('raw', b64TilBytes(env.ENC_KEY), 'AES-GCM', false, ['encrypt', 'decrypt']);
+}
+
+async function krypter(env, tekst) {
+  const key = await encKey(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(tekst)));
+  const samlet = new Uint8Array(iv.length + ct.length);
+  samlet.set(iv);
+  samlet.set(ct, iv.length);
+  return bytesTilB64(samlet);
+}
+
+async function dekrypter(env, b64) {
+  const key = await encKey(env);
+  const buf = b64TilBytes(b64);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.slice(0, 12) }, key, buf.slice(12));
+  return new TextDecoder().decode(pt);
+}
+
+function lagKode() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let s = '';
+  for (let i = 0; i < 16; i++) {
+    if (i > 0 && i % 4 === 0) s += '-';
+    s += KODE_ALFABET[bytes[i] % KODE_ALFABET.length];
+  }
+  return s; // f.eks. K7N2-9PQR-4XTL-M3BW
+}
+
+/* ---------- Infrakit-innlogging ---------- */
+
+// IAM krever parametrene i query-strengen (bekreftet mot API-et).
+async function iamToken(params) {
+  const q = new URLSearchParams(params).toString();
+  const r = await fetch(IAM + '?' + q, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  if (!r.ok) {
+    const feil = new Error('Infrakit avviste innloggingen (HTTP ' + r.status + ')');
+    feil.status = r.status;
+    throw feil;
+  }
+  const j = await r.json();
+  if (!j.accessToken) throw new Error('Fikk ikke token fra Infrakit');
+  return j;
+}
+
+async function hentBedrift(env, kode) {
+  if (!kode) return null;
+  const rad = await env.TIMEAPP_KV.get('company:' + kode, 'json');
+  return rad || null;
+}
+
+// Gyldig accessToken for bedriften - fornyes med refresh-token ved behov.
+async function accessToken(env, kode, bedrift) {
+  const na = Date.now();
+  const bufret = tokenCache.get(kode);
+  if (bufret && bufret.expiresAt > na + 60000) return bufret.accessToken;
+
+  const refresh = await dekrypter(env, bedrift.refreshToken);
+  const svar = await iamToken({ grant_type: 'refresh_token', refresh_token: refresh });
+  tokenCache.set(kode, {
+    accessToken: svar.accessToken,
+    expiresAt: na + (Number(svar.expiresIn) || 3600) * 1000,
+  });
+  // Infrakit gir som regel samme refresh-token tilbake; lagre nytt hvis det kommer
+  if (svar.refreshToken && svar.refreshToken !== refresh) {
+    bedrift.refreshToken = await krypter(env, svar.refreshToken);
+    await env.TIMEAPP_KV.put('company:' + kode, JSON.stringify(bedrift));
+  }
+  return svar.accessToken;
+}
+
+async function ik(sti, token) {
+  const r = await fetch(IK + sti, { headers: { Authorization: 'Bearer ' + token } });
   if (!r.ok) throw new Error('Infrakit svarte ' + r.status);
   return r.json();
 }
@@ -40,9 +135,9 @@ const osloFmt = new Intl.DateTimeFormat('sv-SE', {
 });
 const osloDate = (ms) => osloFmt.format(new Date(ms)); // -> YYYY-MM-DD
 
-async function buildMachines(env) {
-  if (machinesCache.body && Date.now() - machinesCache.ts < 10 * 60000) return machinesCache.body;
-  const token = await getToken(env);
+/* ---------- Datauttrekk ---------- */
+
+async function buildMachines(token) {
   const pr = await ik('/v1/projects', token);
   const plist = Array.isArray(pr) ? pr : pr.projects || [];
   const machines = new Map();
@@ -58,17 +153,13 @@ async function buildMachines(env) {
       }
     } catch { /* hopp over prosjekt uten tilgang */ }
   }
-  const body = JSON.stringify({
+  return JSON.stringify({
     updated: new Date().toISOString(),
     machines: [...machines.values()].sort((a, b) => a.name.localeCompare(b.name, 'nb')),
   });
-  machinesCache = { ts: Date.now(), body };
-  return body;
 }
 
-async function buildHours(env) {
-  if (hoursCache.body && Date.now() - hoursCache.ts < 5 * 60000) return hoursCache.body;
-  const token = await getToken(env);
+async function buildHours(token) {
   const veh = await ik('/ajax_vehicles.json', token);
   const vlist = veh.vehicles || [];
   const endMs = Date.now() + 86400000;
@@ -180,44 +271,89 @@ async function buildHours(env) {
       }
     } catch { /* hopp over kjoretoy som feiler */ }
   }
+  return JSON.stringify({ updated: new Date().toISOString(), days });
+}
 
-  const body = JSON.stringify({ updated: new Date().toISOString(), days });
-  hoursCache = { ts: Date.now(), body };
+async function medCache(kode, type, maxAlderMs, lag) {
+  const nokkel = kode + ':' + type;
+  const bufret = dataCache.get(nokkel);
+  if (bufret && Date.now() - bufret.ts < maxAlderMs) return bufret.body;
+  const body = await lag();
+  dataCache.set(nokkel, { ts: Date.now(), body });
   return body;
 }
+
+/* ---------- HTTP ---------- */
 
 export default {
   async fetch(request, env) {
     const origin = request.headers.get('Origin') || '';
     const cors = {
       'Access-Control-Allow-Origin': ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
-      'Access-Control-Allow-Methods': 'GET, OPTIONS',
-      'Access-Control-Allow-Headers': 'X-Timeapp-Key',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'X-Timeapp-Key, Content-Type',
       'Cache-Control': 'no-store',
       'Content-Type': 'application/json; charset=utf-8',
     };
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
 
-    const path = new URL(request.url).pathname.replace(/\/+$/, '');
+    const sti = new URL(request.url).pathname.replace(/\/+$/, '');
     const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: cors });
+    const kode = (request.headers.get('X-Timeapp-Key') || '').trim().toUpperCase();
 
-    if (path === '/api/infrakit/status') {
+    // --- Admin kobler bedriften til ---
+    if (sti === '/api/infrakit/connect' && request.method === 'POST') {
+      let inn;
+      try { inn = await request.json(); } catch { return json({ error: 'Ugyldig forespoersel' }, 400); }
+      if (!env.SETUP_KEY || inn.setupKey !== env.SETUP_KEY) {
+        return json({ error: 'Feil oppsettkode' }, 401);
+      }
+      const navn = String(inn.company || '').trim().slice(0, 80);
+      if (!navn) return json({ error: 'Mangler bedriftsnavn' }, 400);
+      if (!inn.username || !inn.password) return json({ error: 'Mangler brukernavn eller passord' }, 400);
+      try {
+        const auth = await iamToken({ grant_type: 'password', username: inn.username, password: inn.password });
+        if (!auth.refreshToken) return json({ error: 'Infrakit ga ikke fornybart token for denne brukeren' }, 502);
+        const pr = await ik('/v1/projects', auth.accessToken);
+        const antall = (Array.isArray(pr) ? pr : pr.projects || []).length;
+        const nyKode = lagKode();
+        await env.TIMEAPP_KV.put('company:' + nyKode, JSON.stringify({
+          name: navn,
+          refreshToken: await krypter(env, auth.refreshToken),
+          createdAt: new Date().toISOString(),
+        }));
+        return json({ code: nyKode, company: navn, projects: antall });
+      } catch (err) {
+        if (err.status === 400 || err.status === 401 || err.status === 403) {
+          return json({ error: 'Infrakit avviste innloggingen - sjekk brukernavn og passord' }, 401);
+        }
+        return json({ error: String(err.message || err) }, 502);
+      }
+    }
+
+    // --- Status (aapen, men viser bedrift naar koden er gyldig) ---
+    if (sti === '/api/infrakit/status') {
+      const bedrift = await hentBedrift(env, kode).catch(() => null);
       return json({
-        connected: Boolean(env.INFRAKIT_USER && env.INFRAKIT_PASS),
-        expire: tokenCache.expire || null,
+        connected: Boolean(bedrift),
+        company: bedrift ? bedrift.name : null,
+        needsKey: !kode,
         proxy: 'cloudflare',
       });
     }
 
-    if (path === '/api/infrakit/machines' || path === '/api/infrakit/hours') {
-      if (!env.APP_KEY || request.headers.get('X-Timeapp-Key') !== env.APP_KEY) {
-        return json({ error: 'Ugyldig eller manglende tilgangskode' }, 401);
-      }
+    // --- Data for bedriften bak tilgangskoden ---
+    if (sti === '/api/infrakit/machines' || sti === '/api/infrakit/hours') {
+      const bedrift = await hentBedrift(env, kode);
+      if (!bedrift) return json({ error: 'Ugyldig eller manglende tilgangskode' }, 401);
       try {
-        const body = path.endsWith('machines') ? await buildMachines(env) : await buildHours(env);
+        const token = await accessToken(env, kode, bedrift);
+        const body = sti.endsWith('machines')
+          ? await medCache(kode, 'machines', 10 * 60000, () => buildMachines(token))
+          : await medCache(kode, 'hours', 5 * 60000, () => buildHours(token));
         return new Response(body, { headers: cors });
       } catch (err) {
-        return json({ error: 'Infrakit-kallet feilet: ' + err.message }, 502);
+        return json({ error: 'Infrakit-kallet feilet: ' + (err.message || err) }, 502);
       }
     }
 

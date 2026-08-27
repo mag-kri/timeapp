@@ -247,23 +247,24 @@ function renderMore() {
       <h2>Infrakit</h2>
       <p class="small" style="margin:0 0 8px">${
         ui.infrakit && ui.infrakit.connected
-          ? '<strong style="color:var(--good)">✓ Koblet til Infrakit</strong> – maskiner, timer og dagsrapport hentes automatisk.'
-          : ui.infrakit
-            ? (ui.infrakit.proxy === 'cloudflare'
-                ? '<strong>Proxyen svarer, men mangler Infrakit-innlogging.</strong> Legg inn hemmelighetene i Cloudflare (se cloud/OPPSKRIFT.md).'
-                : '<strong>Ikke koblet.</strong> Kjør <code>scripts\\infrakit-login.ps1</code> på PC-en der serveren kjører, og start serveren på nytt.')
-            : (onLocalhost
-                ? 'Serveren svarer ikke på Infrakit-rutene.'
-                : 'Ingen skyproxy tilkoblet – legg inn adresse og tilgangskode under.')
+          ? `<strong style="color:var(--good)">✓ Koblet til ${esc(ui.infrakit.company || 'Infrakit')}</strong> – maskiner, timer og dagsrapport hentes automatisk.`
+          : 'Ikke tilkoblet. Skriv inn bedriftens tilgangskode under, eller koble bedriften til som administrator.'
       }</p>
-      ${ui.proxy401 ? '<p class="form-error" style="margin:0 0 8px">Proxyen avviste tilgangskoden – sjekk at den er riktig.</p>' : ''}
-      ${onLocalhost ? '' : `
-      <label class="field-label" for="proxyUrl">Proxy-adresse</label>
-      <input class="input" id="proxyUrl" value="${esc(proxyConf().url || DEFAULT_PROXY)}" placeholder="https://timeapp-proxy.NAVN.workers.dev" autocomplete="off" inputmode="url">
-      <label class="field-label" for="proxyKey">Tilgangskode</label>
-      <input class="input" type="password" id="proxyKey" value="${esc(proxyConf().key || '')}" autocomplete="off">
-      <button class="btn" data-action="save-proxy" style="width:100%;margin-top:10px">Lagre tilkobling</button>`}
-      <button class="btn" data-action="sync-machines" style="width:100%;margin-top:8px">Oppdater maskiner og timer</button>
+      ${ui.proxy401 ? '<p class="form-error" style="margin:0 0 8px">Tilgangskoden ble avvist – sjekk at den er riktig skrevet.</p>' : ''}
+      ${`
+      <label class="field-label" for="proxyKey">Bedriftens tilgangskode</label>
+      <input class="input" id="proxyKey" value="${esc(proxyConf().key || '')}" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" style="text-transform:uppercase">
+      <button class="btn primary" data-action="save-proxy" style="width:100%;margin-top:10px">Koble til</button>
+      <details style="margin-top:14px">
+        <summary class="small muted" style="cursor:pointer">Administrator: koble bedriften til Infrakit</summary>
+        <p class="muted small" style="margin:10px 0">Gjøres én gang per bedrift. Du logger inn med bedriftens egen Infrakit-bruker og får en tilgangskode å dele med de ansatte. Passordet lagres aldri – kun et fornybart token.</p>
+        <button class="btn" data-action="admin-connect" style="width:100%">Koble til bedrift …</button>
+      </details>
+      <details style="margin-top:10px">
+        <summary class="small muted" style="cursor:pointer">Avansert: proxy-adresse</summary>
+        <input class="input" id="proxyUrl" value="${esc(proxyConf().url || DEFAULT_PROXY)}" placeholder="https://timeapp-proxy.NAVN.workers.dev" autocomplete="off" inputmode="url" style="margin-top:10px">
+      </details>`}
+      <button class="btn" data-action="sync-machines" style="width:100%;margin-top:12px">Oppdater maskiner og timer</button>
     </section>
     <section class="card">
       <h2>Data</h2>
@@ -506,9 +507,12 @@ function proxyConf() {
   }
 }
 
+// Uten tilgangskode på localhost brukes den lokale serveren (serve.ps1);
+// ellers går alt via skyproxyen.
 function apiUrl(path) {
-  if (onLocalhost) return path;
-  const base = String(proxyConf().url || DEFAULT_PROXY).trim().replace(/\/+$/, '');
+  const conf = proxyConf();
+  if (onLocalhost && !conf.key) return path;
+  const base = String(conf.url || DEFAULT_PROXY).trim().replace(/\/+$/, '');
   return base ? base + '/' + path : path;
 }
 
@@ -532,6 +536,73 @@ async function fetchMachineList() {
       );
     }
   } catch { /* offline eller proxy uten nøkkel – cachen brukes */ }
+}
+
+function lagreProxy(url, key) {
+  try {
+    localStorage.setItem('timeapp:proxy', JSON.stringify({ url: url || DEFAULT_PROXY, key }));
+  } catch { /* lagring utilgjengelig */ }
+  ui.proxy401 = false;
+  fetchInfrakitStatus();
+  fetchMachineList();
+  fetchMachineHours(true);
+}
+
+// Admin kobler bedriften til med sin egen Infrakit-bruker (én gang per bedrift).
+function openConnectModal() {
+  modal.innerHTML = `
+    <form id="connectForm" novalidate>
+      <h2>Koble bedriften til Infrakit</h2>
+      <p class="muted small" style="margin:0">Passordet sendes kun til Infrakit for innlogging, og lagres ingen steder.</p>
+      <label class="field-label" for="cfCompany">Bedriftsnavn</label>
+      <input class="input" id="cfCompany" name="company" maxlength="80" autocomplete="organization">
+      <label class="field-label" for="cfSetup">Oppsettkode</label>
+      <input class="input" id="cfSetup" name="setupKey" type="password" autocomplete="off">
+      <label class="field-label" for="cfUser">Infrakit-brukernavn</label>
+      <input class="input" id="cfUser" name="username" type="email" autocomplete="username" spellcheck="false">
+      <label class="field-label" for="cfPass">Infrakit-passord</label>
+      <input class="input" id="cfPass" name="password" type="password" autocomplete="current-password">
+      <p class="form-error" id="formError" hidden></p>
+      <div class="btnrow">
+        <span class="spacer"></span>
+        <button type="button" class="btn ghost" data-action="close-modal">Avbryt</button>
+        <button type="submit" class="btn primary">Koble til</button>
+      </div>
+    </form>`;
+  modal.showModal();
+}
+
+async function submitConnect(form) {
+  const knapp = form.querySelector('button[type="submit"]');
+  knapp.disabled = true;
+  knapp.textContent = 'Kobler til …';
+  try {
+    const res = await fetch(apiUrl('api/infrakit/connect'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        company: form.company.value.trim(),
+        setupKey: form.setupKey.value,
+        username: form.username.value.trim(),
+        password: form.password.value,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Tilkobling feilet');
+    modal.innerHTML = `
+      <h2>${esc(data.company)} er koblet til</h2>
+      <p class="small" style="margin:0 0 12px">Fant ${data.projects} prosjekt${data.projects === 1 ? '' : 'er'}. Del koden under med de ansatte – de taster den inn under Mer → Infrakit.</p>
+      <p class="kode">${esc(data.code)}</p>
+      <div class="btnrow">
+        <span class="spacer"></span>
+        <button type="button" class="btn primary" data-action="close-modal">Ferdig</button>
+      </div>`;
+    lagreProxy(proxyConf().url, data.code);
+  } catch (err) {
+    knapp.disabled = false;
+    knapp.textContent = 'Koble til';
+    showFormError(String(err.message || err));
+  }
 }
 
 async function fetchInfrakitStatus() {
@@ -654,17 +725,12 @@ const actions = {
   'hours-plus'() { bumpHours(0.5); },
   'sync-machines'() { fetchMachineList(); fetchInfrakitStatus(); fetchMachineHours(true); },
   'save-proxy'() {
-    const url = document.getElementById('proxyUrl');
     const key = document.getElementById('proxyKey');
-    if (!url || !key) return;
-    try {
-      localStorage.setItem('timeapp:proxy', JSON.stringify({ url: url.value.trim(), key: key.value.trim() }));
-    } catch { /* lagring utilgjengelig */ }
-    ui.proxy401 = false;
-    fetchInfrakitStatus();
-    fetchMachineList();
-    fetchMachineHours(true);
+    if (!key) return;
+    const url = document.getElementById('proxyUrl');
+    lagreProxy(url ? url.value.trim() : proxyConf().url, key.value.trim().toUpperCase());
   },
+  'admin-connect'() { openConnectModal(); },
   'close-modal'() { modal.close(); },
   export() { downloadExport(); },
   import() {
@@ -687,6 +753,7 @@ document.addEventListener('click', (e) => {
 document.addEventListener('submit', (e) => {
   if (e.target.id === 'entryForm') { e.preventDefault(); saveEntryForm(e.target); }
   if (e.target.id === 'projectForm') { e.preventDefault(); saveProjectForm(e.target); }
+  if (e.target.id === 'connectForm') { e.preventDefault(); submitConnect(e.target); }
 });
 
 document.addEventListener('input', (e) => {

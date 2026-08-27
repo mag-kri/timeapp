@@ -1,37 +1,63 @@
 # Sette opp skyproxyen (Cloudflare Worker)
 
-Gjør at maskindata fra Infrakit virker på mobilene, ikke bare på PC-en.
-Workeren logger inn mot Infrakit selv og fornyer API-nøkkelen automatisk –
-ukesfornyelsen med `infrakit-login.ps1` trengs ikke i skyen.
+Gjør at maskindata fra Infrakit virker på mobilene, ikke bare på PC-en – og at
+**hver bedrift kobler til sin egen Infrakit-bruker**, så de ser sine egne
+prosjekter og maskiner.
 
-## Steg (5–10 minutter, gratis)
+## Slik henger det sammen
 
-1. Gå til <https://dash.cloudflare.com> og logg inn (eller opprett gratis konto).
-2. Velg **Workers & Pages** → **Create** → **Create Worker**.
-3. Gi den navnet `timeapp-proxy` → **Deploy** (hello world-versjonen).
-4. Trykk **Edit code**, slett alt, og lim inn hele innholdet i `cloud/worker.js`
-   fra dette repoet → **Deploy**.
-5. Gå til workerens **Settings → Variables and Secrets** og legg inn tre
-   hemmeligheter (type **Secret**):
-   - `INFRAKIT_USER` – Infrakit-brukernavnet (e-post)
-   - `INFRAKIT_PASS` – Infrakit-passordet
-   - `APP_KEY` – en selvvalgt tilgangskode (lang og vanskelig å gjette,
-     f.eks. tre-fire tilfeldige ord). Denne deles med de ansatte.
-6. Noter worker-adressen, f.eks. `https://timeapp-proxy.dittnavn.workers.dev`.
+| Rolle | Gjør én gang | Får |
+|---|---|---|
+| Du (som drifter proxyen) | Setter opp workeren under, og deler ut *oppsettkoden* til bedriftsadmins | En proxy alle bedrifter kan bruke |
+| Bedriftsadmin | Mer → Infrakit → «Koble til bedrift», logger inn med bedriftens Infrakit-bruker | En **tilgangskode** for bedriften |
+| Ansatt | Mer → Infrakit → taster tilgangskoden | Sine egne prosjekter, maskiner og timer |
 
-## Koble appen til
+Passord lagres aldri. Proxyen tar vare på et fornybart token (kryptert med
+AES-GCM) og fornyer tilgangen selv – ingen ukentlig ny innlogging.
 
-På hver telefon (én gang): åpne Timeapp → **Mer** → Infrakit →
-lim inn **Proxy-adresse** og **Tilgangskode** → **Lagre tilkobling**.
+## Steg (gratis, ca. 10 minutter)
 
-(Adressen kan også bakes inn i appen som standard – sett `DEFAULT_PROXY`
-øverst i Infrakit-delen av `js/app.js` og push, så slipper de ansatte
-adressefeltet og trenger bare koden.)
+### 1. Lag KV-lageret (her ligger bedriftenes tilkoblinger)
+
+Cloudflare-dashbordet → **Storage & databases → KV** → **Create namespace** →
+navn `timeapp` → Add.
+
+### 2. Bind lageret til workeren
+
+Workeren `timeapp-proxy` → **Settings → Bindings** → **Add binding** →
+**KV namespace** → Variable name: `TIMEAPP_KV`, Namespace: `timeapp` → Deploy.
+
+### 3. Legg inn de to hemmelighetene
+
+**Settings → Variables and Secrets**, begge som type **Secret**:
+
+- `ENC_KEY` – krypteringsnøkkel. Lag en med denne kommandoen (den kopieres til
+  utklippstavlen, uten å vises noe sted):
+
+  ```
+  powershell -Command "[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Max 256 })) | Set-Clipboard"
+  ```
+
+- `SETUP_KEY` – oppsettkoden du deler med bedriftsadmins (velg selv, f.eks.
+  fire tilfeldige ord). Uten den kan ingen koble en bedrift til proxyen.
+
+### 4. Legg inn koden
+
+Workeren → **Edit code** → lim inn hele `cloud/worker.js` → **Deploy**.
+
+## Koble til en bedrift
+
+I appen (Mer → Infrakit → «Administrator: koble bedriften til Infrakit»):
+bedriftsnavn, oppsettkoden, og bedriftens Infrakit-brukernavn og passord.
+Appen viser da tilgangskoden – del den med de ansatte.
 
 ## Sikkerhet
 
-- Passordet og nøklene ligger kun som hemmeligheter hos Cloudflare og på
-  Infrakits egne servere – aldri i appen eller i dette repoet.
-- Uten riktig `APP_KEY` svarer proxyen 401 på alle dataruter.
-- CORS er låst til appens adresser (`mag-kri.github.io` + localhost) –
-  endre `ALLOWED_ORIGINS` øverst i `worker.js` hvis appen flytter.
+- **Passord lagres aldri** – kun et fornybart token, kryptert med `ENC_KEY`.
+- **Bedriftene er isolert** – tilgangskoden bestemmer hvilken Infrakit-tilgang
+  som brukes, og hurtiglagringen er adskilt per bedrift.
+- **Oppsettkoden** hindrer at utenforstående kan registrere bedrifter (og at
+  proxyen misbrukes til å gjette Infrakit-passord).
+- **CORS** er låst til appens adresser – se `ALLOWED_ORIGINS` i `worker.js`.
+- Skal en bedrift kobles fra: slett nøkkelen `company:<tilgangskode>` i
+  KV-lageret.

@@ -31,7 +31,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 6;
+const VERSJON = 7;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -330,7 +330,7 @@ async function buildHours(token, kunProsjektId) {
     try {
       const per = new Map();
       const bucket = (dag) => {
-        if (!per.has(dag)) per.set(dag, { ms: 0, first: null, last: null, turer: 0, km: 0, pelMin: null, pelMaks: null, mod: new Map(), modUten: { ms: 0, fra: null }, mat: new Map(), ruter: new Map() });
+        if (!per.has(dag)) per.set(dag, { ms: 0, first: null, last: null, turer: 0, km: 0, pelMin: null, pelMaks: null, mod: new Map(), modUten: { ms: 0, fra: null }, mat: new Map(), ruter: new Map(), koder: null });
         return per.get(dag);
       };
 
@@ -369,9 +369,9 @@ async function buildHours(token, kunProsjektId) {
 
       const pu = post.projectUuid || (v.activeProject ? String(v.activeProject.uuid) : '');
       if (pu && per.size && v.uuid) {
-        // Turer og omraader hentes en gang per prosjekt og gjenbrukes
+        // Turer, omraader og loggpunkter hentes en gang per prosjekt og gjenbrukes
         if (!areaMaps.has(pu) && budsjett()) {
-          const map = { omrader: new Map(), turer: new Map() };
+          const map = { omrader: new Map(), turer: new Map(), punkter: new Map() };
           try {
             const ar = await ik('/v1/project/' + pu + '/areas', token);
             kall++;
@@ -393,6 +393,30 @@ async function buildHours(token, kunProsjektId) {
               page++;
             } while (batch.length === 100 && page <= 5 && budsjett());
           } catch { /* turer er valgfritt */ }
+          try {
+            // Loggpunkter (as-built): grupper per maskin, dag og punktkode
+            let side = 0;
+            let svar;
+            do {
+              svar = await ik(`/v1/project/${pu}/logpoints?sinceUnixTimeMillis=${startMs}&untilUnixTimeMillis=${endMs}&page=${side}&size=1000`, token);
+              kall++;
+              for (const lp of svar.logpoints || []) {
+                if (lp.voided || !lp.measured) continue;
+                const eq = lp.meta && lp.meta.instrument ? String(lp.meta.instrument.equipmentUuid || '') : '';
+                if (!eq) continue;
+                const naar = Date.parse(lp.measured);
+                if (!naar) continue;
+                const dag = osloDate(naar);
+                if (!map.punkter.has(eq)) map.punkter.set(eq, new Map());
+                const perDag = map.punkter.get(eq);
+                if (!perDag.has(dag)) perDag.set(dag, new Map());
+                const koder = perDag.get(dag);
+                const kode = (lp.meta && lp.meta.code ? String(lp.meta.code).trim() : '') || '(uten kode)';
+                koder.set(kode, (koder.get(kode) || 0) + 1);
+              }
+              side++;
+            } while (svar && svar.last === false && side <= 3 && budsjett());
+          } catch { /* punkter er valgfritt */ }
           areaMaps.set(pu, map);
         }
         const pdata = areaMaps.get(pu);
@@ -412,6 +436,10 @@ async function buildHours(token, kunProsjektId) {
             d.ruter.set(rute, (d.ruter.get(rute) || 0) + 1);
           }
         }
+        // Loggpunkter kobles til dagene maskinen faktisk gikk
+        for (const [dag, koder] of (pdata && pdata.punkter.get(String(v.uuid))) || []) {
+          if (per.has(dag)) per.get(dag).koder = koder;
+        }
       }
 
       const projName = post.projectName || (v.activeProject ? String(v.activeProject.name) : null);
@@ -421,6 +449,9 @@ async function buildHours(token, kunProsjektId) {
         if (d.turer > 0) deler.push(d.turer === 1 ? '1 tur' : d.turer + ' turer');
         if (d.km >= 1) deler.push(Math.round(d.km) + ' km');
         if (d.pelMaks) deler.push(d.pelMin === d.pelMaks ? 'pel ' + d.pelMaks : 'pel ' + d.pelMin + '-' + d.pelMaks);
+        let antallPunkter = 0;
+        if (d.koder) for (const n of d.koder.values()) antallPunkter += n;
+        if (antallPunkter) deler.push(antallPunkter === 1 ? '1 punkt' : antallPunkter + ' punkter');
         if (deler.length) linjer.push(deler.join(SEP));
         const erLastebil = Number(v.type) === 9;
         const visUtenModell = d.modUten.ms > 60000 && !erLastebil;
@@ -433,6 +464,10 @@ async function buildHours(token, kunProsjektId) {
           if (visUtenModell) {
             linjer.push(`${BULLET}${d.modUten.fra ? d.modUten.fra + ' ' : ''}Uten modell${SEP}${timerTekst(d.modUten.ms)}`);
           }
+        }
+        if (antallPunkter) {
+          linjer.push('', 'Punkter:');
+          for (const [kode, n] of [...d.koder].sort((a, b) => b[1] - a[1])) linjer.push(`${BULLET}${kode}${SEP}${n} stk`);
         }
         if (d.mat.size) {
           linjer.push('', 'Masse:');

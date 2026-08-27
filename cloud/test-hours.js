@@ -77,6 +77,21 @@ export async function kjorTimeTest() {
         { start: idag + ' 14:00', end: idag + ' 16:00', title: '', tooltip: '<b>Maskin</b> 14:00 - 16:00<br>Foerste pel.nr.:0<br>Siste pel.nr.:0<br>Modell:' },
       ] }), { status: 200 });
     }
+    if (url.includes('/logpoints')) {
+      // Som i Infrakit: as-built-punkter med kode og maskin-attribusjon.
+      // Ett makulert, ett fra fremmed maskin og ett fra i gaar skal vekk.
+      const igaar = new Date(Date.parse(idag) - 86400000).toISOString().slice(0, 10);
+      return new Response(JSON.stringify({ status: true, last: true, logpoints: [
+        { measured: idag + 'T07:15:00+00:00', voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: idag + 'T08:20:00+00:00', voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: idag + 'T09:05:00+00:00', voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: idag + 'T10:00:00+00:00', voided: null, meta: { code: 'V-KUM', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: idag + 'T10:30:00+00:00', voided: null, meta: { code: '', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: idag + 'T11:00:00+00:00', voided: '2026-01-01T00:00:00+00:00', meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+        { measured: idag + 'T11:30:00+00:00', voided: null, meta: { code: 'ANNEN', instrument: { equipmentUuid: 'm99', type: 'ROVER_GPS' } } },
+        { measured: igaar + 'T10:00:00+00:00', voided: null, meta: { code: 'SOK', instrument: { equipmentUuid: 'm11', type: 'VEHICLE' } } },
+      ] }), { status: 200 });
+    }
     if (url.includes('/areas')) return new Response(JSON.stringify({ areas: [{ uuid: 'a1', title: 'Brudd' }, { uuid: 'a2', title: 'Deponi' }] }), { status: 200 });
     if (url.includes('/trips')) {
       return new Response(JSON.stringify({ trips: [
@@ -118,6 +133,10 @@ export async function kjorTimeTest() {
     sovendeUtelatt: !dager.some((d) => d.machine.includes('Sovende')),
     notatLastebil: dager.find((d) => d.machine === 'Lastebil B')?.note,
     notatGraver: dager.find((d) => d.machine === 'Gravemaskin A')?.note,
+    punkterRett: (() => {
+      const n = dager.find((d) => d.machine === 'Gravemaskin A')?.note || '';
+      return n.includes('5 punkter') && n.includes('SOK') && n.includes('3 stk') && n.includes('V-KUM') && n.includes('(uten kode)') && !n.includes('ANNEN');
+    })(),
     prosjekterIMaskinliste: maskiner.data?.projects,
     prosjektrute: prosjekter.data?.projects,
     kallPerProsjekt,

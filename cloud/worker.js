@@ -1,19 +1,31 @@
-// Timeapp skyproxy - Cloudflare Worker (flerselskaps)
+// Timeapp skyproxy - Cloudflare Worker
 //
-// Hver bedriftsadmin kobler til sin EGEN Infrakit-bruker en gang. Proxyen
-// lagrer kun et fornybart refresh-token (kryptert), aldri passord, og hver
-// bedrift har sin egen tilgangskode - data krysser aldri mellom bedrifter.
+// Brukere, roller og Infrakit-data for flere bedrifter, lagret i D1 (SQLite).
+// Hver bedrift kobles til sin EGEN Infrakit-bruker av koordinatoren, og
+// proxyen lagrer kun et fornybart refresh-token (kryptert) - aldri passord.
+//
+// Passord forlater aldri telefonen: appen utleder en noekkel med PBKDF2 og
+// sender kun den. Serveren lagrer SHA-256 av avledet noekkel + pepper.
 //
 // Ruter:
-//   POST /api/infrakit/connect   (admin: oppsettkode + Infrakit-innlogging -> tilgangskode)
-//   GET  /api/infrakit/status    (X-Timeapp-Key: hvem er tilkoblet)
-//   GET  /api/infrakit/machines  (X-Timeapp-Key: bedriftens maskiner)
-//   GET  /api/infrakit/hours     (X-Timeapp-Key: bedriftens maskintimer)
+//   POST /api/auth/register   koordinator registrerer bedrift (krever oppsettkode)
+//   GET  /api/auth/salt       salt for e-post (roeper ikke om brukeren finnes)
+//   POST /api/auth/login      e-post + avledet noekkel -> oekt-token
+//   POST /api/auth/accept     ansatt loeser inn engangskode og setter passord
+//   GET  /api/auth/me         hvem er innlogget
+//   POST /api/auth/logout     avslutt oekten
+//   GET  /api/users           koordinator: brukere og ventende invitasjoner
+//   POST /api/users/invite    koordinator: opprett engangskode til ansatt
+//   POST /api/users/remove    koordinator: fjern bruker
+//   POST /api/infrakit/connect  koordinator: koble bedriften til Infrakit
+//   GET  /api/infrakit/status   status for innlogget bruker
+//   GET  /api/infrakit/machines bedriftens maskiner
+//   GET  /api/infrakit/hours    bedriftens maskintimer
 //
-// Bindinger som maa settes opp i Cloudflare:
-//   KV-namespace bundet som  TIMEAPP_KV
-//   Secret  ENC_KEY    - base64 av 32 tilfeldige bytes (krypterer refresh-tokens)
-//   Secret  SETUP_KEY  - oppsettkode som admin maa oppgi for aa koble til
+// Bindinger i Cloudflare:
+//   D1-database bundet som  DB          (skjema: cloud/schema.sql)
+//   Secret  ENC_KEY    - base64 av 32 tilfeldige bytes
+//   Secret  SETUP_KEY  - oppsettkode for aa registrere en ny bedrift
 //
 // Merk: kildekoden holdes ren ASCII slik at den taaler kopiering mellom
 // verktoy med ulike tegnsett.
@@ -21,17 +33,23 @@
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
 const ALLOWED_ORIGINS = ['https://mag-kri.github.io', 'http://localhost:8613'];
-const KODE_ALFABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'; // uten forvekslingstegn
+const KODE_ALFABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+const OEKT_LEVETID = 30 * 24 * 3600;
+const INVITE_LEVETID = 14 * 24 * 3600;
 
-const SEP = ' \u00B7 ';   // midtprikk
-const ARROW = ' \u2192 '; // pil
-const BULLET = '\u2022 '; // punktmerke
+const SEP = ' \u00B7 ';
+const ARROW = ' \u2192 ';
+const BULLET = '\u2022 ';
 
 // Mellomlagring per bedrift (nullstilles naar workeren resirkuleres)
-const tokenCache = new Map(); // kode -> { accessToken, expiresAt }
-const dataCache = new Map();  // kode + ':' + type -> { ts, body }
+const tokenCache = new Map();
+const dataCache = new Map();
 
-/* ---------- Kryptering av refresh-tokens ---------- */
+/* ---------- Smaating ---------- */
+
+const na = () => Math.floor(Date.now() / 1000);
+const iso = () => new Date().toISOString();
+const epostAv = (e) => String(e || '').trim().toLowerCase();
 
 function bytesTilB64(bytes) {
   let s = '';
@@ -45,6 +63,47 @@ function b64TilBytes(b64) {
   for (let i = 0; i < bin.length; i++) ut[i] = bin.charCodeAt(i);
   return ut;
 }
+
+function tilfeldigKode(grupper) {
+  const bytes = crypto.getRandomValues(new Uint8Array(grupper * 4));
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) {
+    if (i > 0 && i % 4 === 0) s += '-';
+    s += KODE_ALFABET[bytes[i] % KODE_ALFABET.length];
+  }
+  return s;
+}
+
+function tilfeldigToken() {
+  return bytesTilB64(crypto.getRandomValues(new Uint8Array(32)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// Konstanttidssammenligning
+function likeStrenger(a, b) {
+  const x = String(a || '');
+  const y = String(b || '');
+  if (x.length !== y.length) return false;
+  let ulikt = 0;
+  for (let i = 0; i < x.length; i++) ulikt |= x.charCodeAt(i) ^ y.charCodeAt(i);
+  return ulikt === 0;
+}
+
+async function sha256B64(tekst) {
+  return bytesTilB64(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(tekst))));
+}
+
+// Beviset serveren lagrer. Klienten har allerede kjoert PBKDF2, saa dette er
+// billig for workeren, men like tungt aa knekke offline.
+const verifikator = (env, avledetNokkel) => sha256B64(String(avledetNokkel) + ':' + String(env.ENC_KEY || ''));
+
+// Salt for ukjente e-poster utledes deterministisk, slik at svaret ikke roeper
+// om brukeren finnes.
+async function lokkeSalt(env, epost) {
+  return (await sha256B64('salt:' + epost + ':' + String(env.ENC_KEY || ''))).slice(0, 24);
+}
+
+/* ---------- Kryptering av Infrakit-tokens ---------- */
 
 async function encKey(env) {
   if (!env.ENC_KEY) throw new Error('ENC_KEY mangler i workerens hemmeligheter');
@@ -68,22 +127,45 @@ async function dekrypter(env, b64) {
   return new TextDecoder().decode(pt);
 }
 
-function lagKode() {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  let s = '';
-  for (let i = 0; i < 16; i++) {
-    if (i > 0 && i % 4 === 0) s += '-';
-    s += KODE_ALFABET[bytes[i] % KODE_ALFABET.length];
-  }
-  return s; // f.eks. K7N2-9PQR-4XTL-M3BW
+/* ---------- Database ---------- */
+
+const spor = (env, sql, ...args) => env.DB.prepare(sql).bind(...args);
+
+const hentBruker = (env, epost) =>
+  spor(env, 'SELECT * FROM users WHERE email = ?', epostAv(epost)).first();
+
+const hentBedrift = (env, id) =>
+  spor(env, 'SELECT * FROM companies WHERE id = ?', String(id || '')).first();
+
+async function nyOekt(env, bruker) {
+  const token = tilfeldigToken();
+  await spor(env, 'INSERT INTO sessions (token, email, expires_at, created_at) VALUES (?, ?, ?, ?)',
+    token, bruker.email, na() + OEKT_LEVETID, iso()).run();
+  await spor(env, 'UPDATE users SET last_login = ? WHERE email = ?', iso(), bruker.email).run();
+  return token;
 }
 
-/* ---------- Infrakit-innlogging ---------- */
+async function hentOekt(env, request) {
+  const h = request.headers.get('Authorization') || '';
+  const token = h.startsWith('Bearer ') ? h.slice(7).trim() : '';
+  if (!token) return null;
+  const rad = await spor(env,
+    `SELECT s.token, u.* FROM sessions s JOIN users u ON u.email = s.email
+     WHERE s.token = ? AND s.expires_at > ?`, token, na()).first();
+  if (!rad) return null;
+  const bedrift = await hentBedrift(env, rad.company_id);
+  if (!bedrift) return null;
+  return { token, bruker: rad, bedrift };
+}
+
+const offentligBruker = (b) => ({ email: b.email, name: b.name, role: b.role });
+const offentligBedrift = (b) => ({ id: b.id, name: b.name, infrakit: Boolean(b.refresh_token) });
+
+/* ---------- Infrakit ---------- */
 
 // IAM krever parametrene i query-strengen (bekreftet mot API-et).
 async function iamToken(params) {
-  const q = new URLSearchParams(params).toString();
-  const r = await fetch(IAM + '?' + q, {
+  const r = await fetch(IAM + '?' + new URLSearchParams(params).toString(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: '{}',
@@ -98,28 +180,20 @@ async function iamToken(params) {
   return j;
 }
 
-async function hentBedrift(env, kode) {
-  if (!kode) return null;
-  const rad = await env.TIMEAPP_KV.get('company:' + kode, 'json');
-  return rad || null;
-}
+async function accessToken(env, bedrift) {
+  const bufret = tokenCache.get(bedrift.id);
+  if (bufret && bufret.expiresAt > Date.now() + 60000) return bufret.accessToken;
+  if (!bedrift.refresh_token) throw new Error('Bedriften er ikke koblet til Infrakit');
 
-// Gyldig accessToken for bedriften - fornyes med refresh-token ved behov.
-async function accessToken(env, kode, bedrift) {
-  const na = Date.now();
-  const bufret = tokenCache.get(kode);
-  if (bufret && bufret.expiresAt > na + 60000) return bufret.accessToken;
-
-  const refresh = await dekrypter(env, bedrift.refreshToken);
+  const refresh = await dekrypter(env, bedrift.refresh_token);
   const svar = await iamToken({ grant_type: 'refresh_token', refresh_token: refresh });
-  tokenCache.set(kode, {
+  tokenCache.set(bedrift.id, {
     accessToken: svar.accessToken,
-    expiresAt: na + (Number(svar.expiresIn) || 3600) * 1000,
+    expiresAt: Date.now() + (Number(svar.expiresIn) || 3600) * 1000,
   });
-  // Infrakit gir som regel samme refresh-token tilbake; lagre nytt hvis det kommer
   if (svar.refreshToken && svar.refreshToken !== refresh) {
-    bedrift.refreshToken = await krypter(env, svar.refreshToken);
-    await env.TIMEAPP_KV.put('company:' + kode, JSON.stringify(bedrift));
+    await spor(env, 'UPDATE companies SET refresh_token = ? WHERE id = ?',
+      await krypter(env, svar.refreshToken), bedrift.id).run();
   }
   return svar.accessToken;
 }
@@ -133,9 +207,7 @@ async function ik(sti, token) {
 const osloFmt = new Intl.DateTimeFormat('sv-SE', {
   timeZone: 'Europe/Oslo', year: 'numeric', month: '2-digit', day: '2-digit',
 });
-const osloDate = (ms) => osloFmt.format(new Date(ms)); // -> YYYY-MM-DD
-
-/* ---------- Datauttrekk ---------- */
+const osloDate = (ms) => osloFmt.format(new Date(ms));
 
 async function buildMachines(token) {
   const pr = await ik('/v1/projects', token);
@@ -154,7 +226,7 @@ async function buildMachines(token) {
     } catch { /* hopp over prosjekt uten tilgang */ }
   }
   return JSON.stringify({
-    updated: new Date().toISOString(),
+    updated: iso(),
     machines: [...machines.values()].sort((a, b) => a.name.localeCompare(b.name, 'nb')),
   });
 }
@@ -271,11 +343,11 @@ async function buildHours(token) {
       }
     } catch { /* hopp over kjoretoy som feiler */ }
   }
-  return JSON.stringify({ updated: new Date().toISOString(), days });
+  return JSON.stringify({ updated: iso(), days });
 }
 
-async function medCache(kode, type, maxAlderMs, lag) {
-  const nokkel = kode + ':' + type;
+async function medCache(id, type, maxAlderMs, lag) {
+  const nokkel = id + ':' + type;
   const bufret = dataCache.get(nokkel);
   if (bufret && Date.now() - bufret.ts < maxAlderMs) return bufret.body;
   const body = await lag();
@@ -291,72 +363,225 @@ export default {
     const cors = {
       'Access-Control-Allow-Origin': ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
       'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'X-Timeapp-Key, Content-Type',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type',
       'Cache-Control': 'no-store',
       'Content-Type': 'application/json; charset=utf-8',
     };
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
 
-    const sti = new URL(request.url).pathname.replace(/\/+$/, '');
+    const url = new URL(request.url);
+    const sti = url.pathname.replace(/\/+$/, '');
     const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: cors });
-    const kode = (request.headers.get('X-Timeapp-Key') || '').trim().toUpperCase();
+    const svar = (r) => json(r.body, r.status);
+    const lesInn = async () => {
+      try { return await request.json(); } catch { return null; }
+    };
 
-    // --- Admin kobler bedriften til ---
-    if (sti === '/api/infrakit/connect' && request.method === 'POST') {
-      let inn;
-      try { inn = await request.json(); } catch { return json({ error: 'Ugyldig forespoersel' }, 400); }
-      if (!env.SETUP_KEY || inn.setupKey !== env.SETUP_KEY) {
-        return json({ error: 'Feil oppsettkode' }, 401);
+    try {
+      /* --- Innlogging og registrering --- */
+
+      if (sti === '/api/auth/salt') {
+        const epost = epostAv(url.searchParams.get('email'));
+        if (!epost) return json({ error: 'Mangler e-post' }, 400);
+        const bruker = await hentBruker(env, epost);
+        return json({ salt: bruker ? bruker.salt : await lokkeSalt(env, epost) });
       }
-      const navn = String(inn.company || '').trim().slice(0, 80);
-      if (!navn) return json({ error: 'Mangler bedriftsnavn' }, 400);
-      if (!inn.username || !inn.password) return json({ error: 'Mangler brukernavn eller passord' }, 400);
-      try {
-        const auth = await iamToken({ grant_type: 'password', username: inn.username, password: inn.password });
-        if (!auth.refreshToken) return json({ error: 'Infrakit ga ikke fornybart token for denne brukeren' }, 502);
-        const pr = await ik('/v1/projects', auth.accessToken);
-        const antall = (Array.isArray(pr) ? pr : pr.projects || []).length;
-        const nyKode = lagKode();
-        await env.TIMEAPP_KV.put('company:' + nyKode, JSON.stringify({
-          name: navn,
-          refreshToken: await krypter(env, auth.refreshToken),
-          createdAt: new Date().toISOString(),
-        }));
-        return json({ code: nyKode, company: navn, projects: antall });
-      } catch (err) {
-        if (err.status === 400 || err.status === 401 || err.status === 403) {
-          return json({ error: 'Infrakit avviste innloggingen - sjekk brukernavn og passord' }, 401);
+
+      if (sti === '/api/auth/register' && request.method === 'POST') {
+        const inn = await lesInn();
+        if (!inn) return json({ error: 'Ugyldig forespoersel' }, 400);
+        if (!env.SETUP_KEY || !likeStrenger(inn.setupKey, env.SETUP_KEY)) {
+          return json({ error: 'Feil oppsettkode' }, 401);
         }
-        return json({ error: String(err.message || err) }, 502);
+        const epost = epostAv(inn.email);
+        const navn = String(inn.name || '').trim().slice(0, 80);
+        const bedriftsnavn = String(inn.company || '').trim().slice(0, 80);
+        if (!epost.includes('@')) return json({ error: 'Ugyldig e-post' }, 400);
+        if (!navn) return json({ error: 'Mangler navn' }, 400);
+        if (!bedriftsnavn) return json({ error: 'Mangler bedriftsnavn' }, 400);
+        if (!inn.salt || !inn.derivedKey) return json({ error: 'Mangler passord' }, 400);
+        if (await hentBruker(env, epost)) return json({ error: 'Denne e-posten er allerede registrert' }, 409);
+
+        const cid = tilfeldigKode(3);
+        await spor(env, 'INSERT INTO companies (id, name, created_at) VALUES (?, ?, ?)', cid, bedriftsnavn, iso()).run();
+        const bruker = {
+          email: epost, name: navn, company_id: cid, role: 'coordinator',
+          salt: String(inn.salt).slice(0, 64), verifier: await verifikator(env, inn.derivedKey),
+        };
+        await spor(env,
+          'INSERT INTO users (email, name, company_id, role, salt, verifier, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          bruker.email, bruker.name, cid, bruker.role, bruker.salt, bruker.verifier, iso()).run();
+        return json({
+          token: await nyOekt(env, bruker),
+          user: offentligBruker(bruker),
+          company: { id: cid, name: bedriftsnavn, infrakit: false },
+        });
       }
-    }
 
-    // --- Status (aapen, men viser bedrift naar koden er gyldig) ---
-    if (sti === '/api/infrakit/status') {
-      const bedrift = await hentBedrift(env, kode).catch(() => null);
-      return json({
-        connected: Boolean(bedrift),
-        company: bedrift ? bedrift.name : null,
-        needsKey: !kode,
-        proxy: 'cloudflare',
-      });
-    }
-
-    // --- Data for bedriften bak tilgangskoden ---
-    if (sti === '/api/infrakit/machines' || sti === '/api/infrakit/hours') {
-      const bedrift = await hentBedrift(env, kode);
-      if (!bedrift) return json({ error: 'Ugyldig eller manglende tilgangskode' }, 401);
-      try {
-        const token = await accessToken(env, kode, bedrift);
-        const body = sti.endsWith('machines')
-          ? await medCache(kode, 'machines', 10 * 60000, () => buildMachines(token))
-          : await medCache(kode, 'hours', 5 * 60000, () => buildHours(token));
-        return new Response(body, { headers: cors });
-      } catch (err) {
-        return json({ error: 'Infrakit-kallet feilet: ' + (err.message || err) }, 502);
+      if (sti === '/api/auth/login' && request.method === 'POST') {
+        const inn = await lesInn();
+        if (!inn) return json({ error: 'Ugyldig forespoersel' }, 400);
+        const bruker = await hentBruker(env, inn.email);
+        const gitt = await verifikator(env, inn.derivedKey);
+        if (!bruker || !likeStrenger(bruker.verifier, gitt)) {
+          return json({ error: 'Feil e-post eller passord' }, 401);
+        }
+        const bedrift = await hentBedrift(env, bruker.company_id);
+        return json({
+          token: await nyOekt(env, bruker),
+          user: offentligBruker(bruker),
+          company: bedrift ? offentligBedrift(bedrift) : null,
+        });
       }
-    }
 
-    return json({ error: 'ukjent rute' }, 404);
+      if (sti === '/api/auth/accept' && request.method === 'POST') {
+        const inn = await lesInn();
+        if (!inn) return json({ error: 'Ugyldig forespoersel' }, 400);
+        const kode = String(inn.code || '').trim().toUpperCase();
+        const invitasjon = kode
+          ? await spor(env, 'SELECT * FROM invites WHERE code = ? AND expires_at > ?', kode, na()).first()
+          : null;
+        if (!invitasjon) return json({ error: 'Ugyldig eller utloept engangskode' }, 401);
+        if (!inn.salt || !inn.derivedKey) return json({ error: 'Mangler passord' }, 400);
+        if (await hentBruker(env, invitasjon.email)) {
+          return json({ error: 'Brukeren finnes allerede - logg inn i stedet' }, 409);
+        }
+        const bruker = {
+          email: invitasjon.email,
+          name: String(inn.name || invitasjon.name || '').trim().slice(0, 80) || invitasjon.email,
+          company_id: invitasjon.company_id,
+          role: invitasjon.role,
+          salt: String(inn.salt).slice(0, 64),
+          verifier: await verifikator(env, inn.derivedKey),
+        };
+        await spor(env,
+          'INSERT INTO users (email, name, company_id, role, salt, verifier, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          bruker.email, bruker.name, bruker.company_id, bruker.role, bruker.salt, bruker.verifier, iso()).run();
+        await spor(env, 'DELETE FROM invites WHERE code = ?', kode).run();
+        const bedrift = await hentBedrift(env, bruker.company_id);
+        return json({
+          token: await nyOekt(env, bruker),
+          user: offentligBruker(bruker),
+          company: bedrift ? offentligBedrift(bedrift) : null,
+        });
+      }
+
+      /* --- Alt under her krever innlogging --- */
+
+      const oekt = await hentOekt(env, request);
+
+      if (sti === '/api/auth/me') {
+        if (!oekt) return json({ error: 'Ikke innlogget' }, 401);
+        return json({ user: offentligBruker(oekt.bruker), company: offentligBedrift(oekt.bedrift) });
+      }
+
+      if (sti === '/api/auth/logout' && request.method === 'POST') {
+        if (oekt) await spor(env, 'DELETE FROM sessions WHERE token = ?', oekt.token).run();
+        return json({ ok: true });
+      }
+
+      if (sti.startsWith('/api/users') || sti.startsWith('/api/infrakit')) {
+        if (!oekt) return json({ error: 'Ikke innlogget' }, 401);
+      }
+
+      /* --- Brukeradministrasjon (kun koordinator) --- */
+
+      const kunKoordinator = () => oekt.bruker.role === 'coordinator';
+
+      if (sti === '/api/users') {
+        if (!kunKoordinator()) return json({ error: 'Kun koordinator kan se brukerlista' }, 403);
+        const brukere = await spor(env,
+          'SELECT email, name, role, created_at, last_login FROM users WHERE company_id = ? ORDER BY name',
+          oekt.bruker.company_id).all();
+        const ventende = await spor(env,
+          'SELECT code, email, name, role FROM invites WHERE company_id = ? AND expires_at > ? ORDER BY email',
+          oekt.bruker.company_id, na()).all();
+        return json({ users: brukere.results || [], pending: ventende.results || [] });
+      }
+
+      if (sti === '/api/users/invite' && request.method === 'POST') {
+        if (!kunKoordinator()) return json({ error: 'Kun koordinator kan opprette brukere' }, 403);
+        const inn = await lesInn();
+        if (!inn) return json({ error: 'Ugyldig forespoersel' }, 400);
+        const epost = epostAv(inn.email);
+        if (!epost.includes('@')) return json({ error: 'Ugyldig e-post' }, 400);
+        if (await hentBruker(env, epost)) return json({ error: 'Denne e-posten har allerede en bruker' }, 409);
+        const kode = tilfeldigKode(2);
+        await spor(env,
+          'INSERT INTO invites (code, email, name, company_id, role, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          kode, epost, String(inn.name || '').trim().slice(0, 80), oekt.bruker.company_id,
+          inn.role === 'coordinator' ? 'coordinator' : 'employee', na() + INVITE_LEVETID, iso()).run();
+        return json({ code: kode, email: epost });
+      }
+
+      if (sti === '/api/users/remove' && request.method === 'POST') {
+        if (!kunKoordinator()) return json({ error: 'Kun koordinator kan fjerne brukere' }, 403);
+        const inn = await lesInn();
+        if (!inn) return json({ error: 'Ugyldig forespoersel' }, 400);
+        const epost = epostAv(inn.email);
+        if (epost === oekt.bruker.email) return json({ error: 'Du kan ikke fjerne deg selv' }, 400);
+        const b = await hentBruker(env, epost);
+        if (!b || b.company_id !== oekt.bruker.company_id) return json({ error: 'Fant ikke brukeren' }, 404);
+        await spor(env, 'DELETE FROM sessions WHERE email = ?', epost).run();
+        await spor(env, 'DELETE FROM users WHERE email = ?', epost).run();
+        return json({ removed: epost });
+      }
+
+      /* --- Infrakit --- */
+
+      if (sti === '/api/infrakit/connect' && request.method === 'POST') {
+        if (!kunKoordinator()) return json({ error: 'Kun koordinator kan koble bedriften til Infrakit' }, 403);
+        const inn = await lesInn();
+        if (!inn) return json({ error: 'Ugyldig forespoersel' }, 400);
+        if (!inn.username || !inn.password) return json({ error: 'Mangler Infrakit-innlogging' }, 400);
+        try {
+          const auth = await iamToken({ grant_type: 'password', username: inn.username, password: inn.password });
+          if (!auth.refreshToken) return json({ error: 'Infrakit ga ikke fornybart token for denne brukeren' }, 502);
+          const pr = await ik('/v1/projects', auth.accessToken);
+          const antall = (Array.isArray(pr) ? pr : pr.projects || []).length;
+          await spor(env,
+            'UPDATE companies SET refresh_token = ?, connected_by = ?, connected_at = ? WHERE id = ?',
+            await krypter(env, auth.refreshToken), oekt.bruker.email, iso(), oekt.bruker.company_id).run();
+          tokenCache.delete(oekt.bruker.company_id);
+          dataCache.delete(oekt.bruker.company_id + ':machines');
+          dataCache.delete(oekt.bruker.company_id + ':hours');
+          return json({ connected: true, company: oekt.bedrift.name, projects: antall });
+        } catch (err) {
+          if (err.status === 400 || err.status === 401 || err.status === 403) {
+            return json({ error: 'Infrakit avviste innloggingen - sjekk brukernavn og passord' }, 401);
+          }
+          return json({ error: String(err.message || err) }, 502);
+        }
+      }
+
+      if (sti === '/api/infrakit/status') {
+        return json({
+          connected: Boolean(oekt.bedrift.refresh_token),
+          company: oekt.bedrift.name,
+          role: oekt.bruker.role,
+          connectedBy: oekt.bedrift.connected_by || null,
+          proxy: 'cloudflare',
+        });
+      }
+
+      if (sti === '/api/infrakit/machines' || sti === '/api/infrakit/hours') {
+        if (!oekt.bedrift.refresh_token) {
+          return json({ error: 'Bedriften er ikke koblet til Infrakit ennaa' }, 409);
+        }
+        try {
+          const token = await accessToken(env, oekt.bedrift);
+          const body = sti.endsWith('machines')
+            ? await medCache(oekt.bedrift.id, 'machines', 10 * 60000, () => buildMachines(token))
+            : await medCache(oekt.bedrift.id, 'hours', 5 * 60000, () => buildHours(token));
+          return new Response(body, { headers: cors });
+        } catch (err) {
+          return json({ error: 'Infrakit-kallet feilet: ' + (err.message || err) }, 502);
+        }
+      }
+
+      return json({ error: 'ukjent rute' }, 404);
+    } catch (err) {
+      return json({ error: 'Serverfeil: ' + (err.message || err) }, 500);
+    }
   },
 };

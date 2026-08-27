@@ -34,9 +34,105 @@ const icons = {
 /* ---------- Render ---------- */
 
 function render() {
+  if (!auth()) {
+    app.innerHTML = `<main class="page">${renderLogin()}</main>`;
+    return;
+  }
   const pages = { clock: renderClock, day: renderDay, week: renderWeek, more: renderMore };
   app.innerHTML = `<main class="page">${pages[ui.tab]()}</main>${renderTabBar()}`;
   syncTimer();
+}
+
+/* ---------- Innloggingsskjerm ---------- */
+
+function renderLogin() {
+  const modus = ui.loginModus || 'login';
+  const feil = ui.loginFeil ? `<p class="form-error" style="margin:0 0 10px">${esc(ui.loginFeil)}</p>` : '';
+  const jobber = ui.loginJobber;
+
+  if (modus === 'invite') {
+    return `
+      <header class="page-head center"><h1>Ny bruker</h1><p class="muted">Skriv inn engangskoden du fikk av koordinatoren.</p></header>
+      <form class="card" id="inviteForm">
+        ${feil}
+        <label class="field-label" for="ivCode" style="margin-top:0">Engangskode</label>
+        <input class="input" id="ivCode" name="code" placeholder="XXXX-XXXX" autocomplete="off" spellcheck="false" style="text-transform:uppercase">
+        <label class="field-label" for="ivName">Ditt navn</label>
+        <input class="input" id="ivName" name="name" autocomplete="name">
+        <label class="field-label" for="ivPass">Velg passord</label>
+        <input class="input" id="ivPass" name="password" type="password" autocomplete="new-password">
+        <label class="field-label" for="ivPass2">Gjenta passord</label>
+        <input class="input" id="ivPass2" name="password2" type="password" autocomplete="new-password">
+        <button class="btn primary big" type="submit" style="margin-top:16px"${jobber ? ' disabled' : ''}>${jobber ? 'Oppretter …' : 'Opprett bruker'}</button>
+        <button class="btn ghost" type="button" data-action="login-mode" data-mode="login" style="width:100%;margin-top:8px">Tilbake til innlogging</button>
+      </form>`;
+  }
+
+  if (modus === 'register') {
+    return `
+      <header class="page-head center"><h1>Registrer bedrift</h1><p class="muted">Kun for koordinator. Krever oppsettkoden.</p></header>
+      <form class="card" id="registerForm">
+        ${feil}
+        <label class="field-label" for="rgCompany" style="margin-top:0">Bedriftsnavn</label>
+        <input class="input" id="rgCompany" name="company" autocomplete="organization">
+        <label class="field-label" for="rgSetup">Oppsettkode</label>
+        <input class="input" id="rgSetup" name="setupKey" type="password" autocomplete="off">
+        <label class="field-label" for="rgName">Ditt navn</label>
+        <input class="input" id="rgName" name="name" autocomplete="name">
+        <label class="field-label" for="rgEmail">E-post</label>
+        <input class="input" id="rgEmail" name="email" type="email" autocomplete="email" spellcheck="false">
+        <label class="field-label" for="rgPass">Velg passord</label>
+        <input class="input" id="rgPass" name="password" type="password" autocomplete="new-password">
+        <label class="field-label" for="rgPass2">Gjenta passord</label>
+        <input class="input" id="rgPass2" name="password2" type="password" autocomplete="new-password">
+        <button class="btn primary big" type="submit" style="margin-top:16px"${jobber ? ' disabled' : ''}>${jobber ? 'Registrerer …' : 'Registrer bedrift'}</button>
+        <button class="btn ghost" type="button" data-action="login-mode" data-mode="login" style="width:100%;margin-top:8px">Tilbake til innlogging</button>
+      </form>`;
+  }
+
+  return `
+    <header class="page-head center" style="margin-top:24px">
+      <h1>Timeapp</h1>
+      <p class="muted">Logg inn for å føre timer</p>
+    </header>
+    <form class="card" id="loginForm">
+      ${feil}
+      <label class="field-label" for="lgEmail" style="margin-top:0">E-post</label>
+      <input class="input" id="lgEmail" name="email" type="email" autocomplete="username" spellcheck="false">
+      <label class="field-label" for="lgPass">Passord</label>
+      <input class="input" id="lgPass" name="password" type="password" autocomplete="current-password">
+      <button class="btn primary big" type="submit" style="margin-top:16px"${jobber ? ' disabled' : ''}>${jobber ? 'Logger inn …' : 'Logg inn'}</button>
+    </form>
+    <div class="center">
+      <button class="btn ghost small" data-action="login-mode" data-mode="invite">Jeg har fått en engangskode</button>
+    </div>
+    <div class="center">
+      <button class="btn ghost small muted" data-action="login-mode" data-mode="register">Registrer en ny bedrift</button>
+    </div>`;
+}
+
+async function loginFlyt(fn) {
+  ui.loginFeil = '';
+  ui.loginJobber = true;
+  render();
+  try {
+    const data = await fn();
+    lagreAuth({ token: data.token, user: data.user, company: data.company });
+    ui.loginJobber = false;
+    ui.loginModus = 'login';
+    ui.tab = 'clock';
+    render();
+    synkFraSky();
+  } catch (err) {
+    ui.loginJobber = false;
+    ui.loginFeil = String(err.message || err);
+    render();
+  }
+}
+
+function sjekkPassord(p1, p2) {
+  if (!p1 || p1.length < 8) throw new Error('Passordet må ha minst 8 tegn.');
+  if (p1 !== p2) throw new Error('Passordene er ikke like.');
 }
 
 function renderTabBar() {
@@ -228,6 +324,76 @@ function renderWeek() {
 
 /* --- Mer --- */
 
+const erKoordinator = () => (auth()?.user?.role === 'coordinator');
+
+function renderKonto() {
+  const a = auth();
+  if (!a) return '';
+  return `
+    <section class="card">
+      <h2>Konto</h2>
+      <div class="entry" style="cursor:default">
+        <span class="entry-main">
+          <span class="entry-title">${esc(a.user.name)}</span>
+          <span class="entry-sub muted">${esc(a.user.email)} · ${a.user.role === 'coordinator' ? 'Koordinator' : 'Ansatt'}${a.company ? ' · ' + esc(a.company.name) : ''}</span>
+        </span>
+      </div>
+      <button class="btn ghost" data-action="logout" style="width:100%;margin-top:8px">Logg ut</button>
+    </section>`;
+}
+
+function renderInfrakitKort() {
+  const tilkoblet = ui.infrakit && ui.infrakit.connected;
+  return `
+    <section class="card">
+      <h2>Infrakit</h2>
+      <p class="small" style="margin:0 0 10px">${
+        tilkoblet
+          ? `<strong style="color:var(--good)">✓ Tilkoblet</strong> – maskiner, timer og dagsrapport hentes automatisk${ui.infrakit.connectedBy ? ' (koblet til av ' + esc(ui.infrakit.connectedBy) + ')' : ''}.`
+          : erKoordinator()
+            ? 'Bedriften er ikke koblet til Infrakit ennå. Logg inn med bedriftens Infrakit-bruker for å hente maskiner og timer.'
+            : 'Bedriften er ikke koblet til Infrakit ennå. Koordinatoren din må gjøre det.'
+      }</p>
+      ${erKoordinator() ? `<button class="btn${tilkoblet ? '' : ' primary'}" data-action="admin-connect" style="width:100%">${tilkoblet ? 'Koble til på nytt …' : 'Koble til Infrakit …'}</button>` : ''}
+      <button class="btn" data-action="sync-machines" style="width:100%;margin-top:8px">Oppdater maskiner og timer</button>
+      <details style="margin-top:12px">
+        <summary class="small muted" style="cursor:pointer">Avansert: serveradresse</summary>
+        <input class="input" id="proxyUrl" value="${esc(proxyConf().url || DEFAULT_PROXY)}" autocomplete="off" inputmode="url" style="margin-top:10px">
+        <button class="btn small" data-action="save-proxy" style="width:100%;margin-top:8px">Lagre adresse</button>
+      </details>
+    </section>`;
+}
+
+function renderBrukere() {
+  const d = ui.brukere;
+  return `
+    <section class="card">
+      <h2>Ansatte</h2>
+      ${!d ? '<p class="empty">Henter …</p>' : `
+        ${d.users.length ? `<ul class="entries">${d.users.map((u) => `
+          <li><div class="entry" style="cursor:default">
+            <span class="entry-main">
+              <span class="entry-title">${esc(u.name)}</span>
+              <span class="entry-sub muted">${esc(u.email)} · ${u.role === 'coordinator' ? 'Koordinator' : 'Ansatt'}${u.last_login ? '' : ' · aldri logget inn'}</span>
+            </span>
+            ${u.email === auth().user.email ? '<span class="entry-edit">Deg</span>'
+              : `<button class="btn ghost small danger-text" data-action="remove-user" data-email="${esc(u.email)}">Fjern</button>`}
+          </div></li>`).join('')}</ul>` : '<p class="empty">Ingen ansatte lagt til ennå.</p>'}
+        ${d.pending.length ? `
+          <h2 style="margin-top:16px">Venter på å bli tatt i bruk</h2>
+          <ul class="entries">${d.pending.map((p) => `
+            <li><div class="entry" style="cursor:default">
+              <span class="entry-main">
+                <span class="entry-title">${esc(p.name || p.email)}</span>
+                <span class="entry-sub muted">${esc(p.email)}</span>
+              </span>
+              <span class="entry-hours">${esc(p.code)}</span>
+            </div></li>`).join('')}</ul>` : ''}
+      `}
+      <button class="btn primary" data-action="invite-user" style="width:100%;margin-top:10px">+ Legg til ansatt</button>
+    </section>`;
+}
+
 function renderMore() {
   return `
     <header class="page-head"><h1>Mer</h1></header>
@@ -243,29 +409,9 @@ function renderMore() {
         : '<p class="empty">Ingen prosjekter ennå. Med prosjekter ser du enkelt hva timene gikk til.</p>'}
       <button class="btn" data-action="new-project" style="width:100%;margin-top:8px">+ Nytt prosjekt</button>
     </section>
-    <section class="card">
-      <h2>Infrakit</h2>
-      <p class="small" style="margin:0 0 8px">${
-        ui.infrakit && ui.infrakit.connected
-          ? `<strong style="color:var(--good)">✓ Koblet til ${esc(ui.infrakit.company || 'Infrakit')}</strong> – maskiner, timer og dagsrapport hentes automatisk.`
-          : 'Ikke tilkoblet. Skriv inn bedriftens tilgangskode under, eller koble bedriften til som administrator.'
-      }</p>
-      ${ui.proxy401 ? '<p class="form-error" style="margin:0 0 8px">Tilgangskoden ble avvist – sjekk at den er riktig skrevet.</p>' : ''}
-      ${`
-      <label class="field-label" for="proxyKey">Bedriftens tilgangskode</label>
-      <input class="input" id="proxyKey" value="${esc(proxyConf().key || '')}" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" style="text-transform:uppercase">
-      <button class="btn primary" data-action="save-proxy" style="width:100%;margin-top:10px">Koble til</button>
-      <details style="margin-top:14px">
-        <summary class="small muted" style="cursor:pointer">Administrator: koble bedriften til Infrakit</summary>
-        <p class="muted small" style="margin:10px 0">Gjøres én gang per bedrift. Du logger inn med bedriftens egen Infrakit-bruker og får en tilgangskode å dele med de ansatte. Passordet lagres aldri – kun et fornybart token.</p>
-        <button class="btn" data-action="admin-connect" style="width:100%">Koble til bedrift …</button>
-      </details>
-      <details style="margin-top:10px">
-        <summary class="small muted" style="cursor:pointer">Avansert: proxy-adresse</summary>
-        <input class="input" id="proxyUrl" value="${esc(proxyConf().url || DEFAULT_PROXY)}" placeholder="https://timeapp-proxy.NAVN.workers.dev" autocomplete="off" inputmode="url" style="margin-top:10px">
-      </details>`}
-      <button class="btn" data-action="sync-machines" style="width:100%;margin-top:12px">Oppdater maskiner og timer</button>
-    </section>
+    ${renderKonto()}
+    ${renderInfrakitKort()}
+    ${erKoordinator() ? renderBrukere() : ''}
     <section class="card">
       <h2>Data</h2>
       <p class="muted small" style="margin:0 0 12px">Alt lagres kun lokalt på denne enheten. Ta en sikkerhetskopi med jevne mellomrom.</p>
@@ -494,10 +640,10 @@ function bumpHours(delta) {
   inp.value = d.fmtHours(next);
 }
 
-/* --- Infrakit-proxy: lokalt (serve.ps1) eller i skyen (cloud/worker.js) --- */
+/* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
-const onLocalhost = ['localhost', '127.0.0.1'].includes(location.hostname);
+const PBKDF2_RUNDER = 300000;
 
 function proxyConf() {
   try {
@@ -507,27 +653,71 @@ function proxyConf() {
   }
 }
 
-// Uten tilgangskode på localhost brukes den lokale serveren (serve.ps1);
-// ellers går alt via skyproxyen.
 function apiUrl(path) {
-  const conf = proxyConf();
-  if (onLocalhost && !conf.key) return path;
-  const base = String(conf.url || DEFAULT_PROXY).trim().replace(/\/+$/, '');
-  return base ? base + '/' + path : path;
+  const base = String(proxyConf().url || DEFAULT_PROXY).trim().replace(/\/+$/, '');
+  return base + '/' + path;
+}
+
+/* --- Innlogging --- */
+
+function auth() {
+  try {
+    return JSON.parse(localStorage.getItem('timeapp:auth') || 'null');
+  } catch {
+    return null;
+  }
+}
+
+function lagreAuth(data) {
+  try {
+    if (data) localStorage.setItem('timeapp:auth', JSON.stringify(data));
+    else localStorage.removeItem('timeapp:auth');
+  } catch { /* lagring utilgjengelig */ }
 }
 
 function apiHeaders() {
-  const key = proxyConf().key;
-  return key ? { 'X-Timeapp-Key': key } : {};
+  const a = auth();
+  return a && a.token ? { Authorization: 'Bearer ' + a.token } : {};
 }
+
+// Kall mot skyen. Kaster feil med serverens melding, og logger ut ved 401.
+async function api(path, { method = 'GET', body } = {}) {
+  const headers = { ...apiHeaders() };
+  if (body) headers['Content-Type'] = 'application/json';
+  const res = await fetch(apiUrl(path), { method, headers, cache: 'no-store', body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (res.status === 401 && auth() && !path.startsWith('api/auth/')) {
+      lagreAuth(null);
+      render();
+    }
+    const feil = new Error(data.error || 'Noe gikk galt (HTTP ' + res.status + ')');
+    feil.status = res.status;
+    throw feil;
+  }
+  return data;
+}
+
+const b64Til = (b64) => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+const tilB64 = (bytes) => btoa(String.fromCharCode(...bytes));
+
+// Passordet forlater aldri telefonen – serveren får kun den avledede nøkkelen.
+async function avledNokkel(passord, saltB64) {
+  const grunn = await crypto.subtle.importKey('raw', new TextEncoder().encode(passord), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: b64Til(saltB64), iterations: PBKDF2_RUNDER, hash: 'SHA-256' },
+    grunn, 256
+  );
+  return tilB64(new Uint8Array(bits));
+}
+
+const nyttSalt = () => tilB64(crypto.getRandomValues(new Uint8Array(16)));
 
 // Henter den faktiske maskinlista fra Infrakit via proxyen.
 async function fetchMachineList() {
+  if (!auth()) return;
   try {
-    const res = await fetch(apiUrl('api/infrakit/machines'), { cache: 'no-store', headers: apiHeaders() });
-    ui.proxy401 = res.status === 401;
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await api('api/infrakit/machines');
     if (Array.isArray(data.machines)) {
       store.saveMachineList(
         data.machines
@@ -538,26 +728,12 @@ async function fetchMachineList() {
   } catch { /* offline eller proxy uten nøkkel – cachen brukes */ }
 }
 
-function lagreProxy(url, key) {
-  try {
-    localStorage.setItem('timeapp:proxy', JSON.stringify({ url: url || DEFAULT_PROXY, key }));
-  } catch { /* lagring utilgjengelig */ }
-  ui.proxy401 = false;
-  fetchInfrakitStatus();
-  fetchMachineList();
-  fetchMachineHours(true);
-}
-
-// Admin kobler bedriften til med sin egen Infrakit-bruker (én gang per bedrift).
+// Koordinator kobler bedriften til med bedriftens egen Infrakit-bruker.
 function openConnectModal() {
   modal.innerHTML = `
     <form id="connectForm" novalidate>
-      <h2>Koble bedriften til Infrakit</h2>
-      <p class="muted small" style="margin:0">Passordet sendes kun til Infrakit for innlogging, og lagres ingen steder.</p>
-      <label class="field-label" for="cfCompany">Bedriftsnavn</label>
-      <input class="input" id="cfCompany" name="company" maxlength="80" autocomplete="organization">
-      <label class="field-label" for="cfSetup">Oppsettkode</label>
-      <input class="input" id="cfSetup" name="setupKey" type="password" autocomplete="off">
+      <h2>Koble til Infrakit</h2>
+      <p class="muted small" style="margin:0">Bruk bedriftens Infrakit-innlogging. Passordet sendes kun videre til Infrakit for innlogging, og lagres ingen steder – vi tar kun vare på en fornybar tilgang.</p>
       <label class="field-label" for="cfUser">Infrakit-brukernavn</label>
       <input class="input" id="cfUser" name="username" type="email" autocomplete="username" spellcheck="false">
       <label class="field-label" for="cfPass">Infrakit-passord</label>
@@ -577,27 +753,15 @@ async function submitConnect(form) {
   knapp.disabled = true;
   knapp.textContent = 'Kobler til …';
   try {
-    const res = await fetch(apiUrl('api/infrakit/connect'), {
+    const data = await api('api/infrakit/connect', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        company: form.company.value.trim(),
-        setupKey: form.setupKey.value,
-        username: form.username.value.trim(),
-        password: form.password.value,
-      }),
+      body: { username: form.username.value.trim(), password: form.password.value },
     });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Tilkobling feilet');
-    modal.innerHTML = `
-      <h2>${esc(data.company)} er koblet til</h2>
-      <p class="small" style="margin:0 0 12px">Fant ${data.projects} prosjekt${data.projects === 1 ? '' : 'er'}. Del koden under med de ansatte – de taster den inn under Mer → Infrakit.</p>
-      <p class="kode">${esc(data.code)}</p>
-      <div class="btnrow">
-        <span class="spacer"></span>
-        <button type="button" class="btn primary" data-action="close-modal">Ferdig</button>
-      </div>`;
-    lagreProxy(proxyConf().url, data.code);
+    modal.close();
+    alert(`Koblet til Infrakit – fant ${data.projects} prosjekt${data.projects === 1 ? '' : 'er'}.`);
+    fetchInfrakitStatus();
+    fetchMachineList();
+    fetchMachineHours(false);
   } catch (err) {
     knapp.disabled = false;
     knapp.textContent = 'Koble til';
@@ -605,10 +769,68 @@ async function submitConnect(form) {
   }
 }
 
-async function fetchInfrakitStatus() {
+// Koordinator oppretter bruker til en ansatt og får en engangskode.
+function openInviteUserModal() {
+  modal.innerHTML = `
+    <form id="inviteUserForm" novalidate>
+      <h2>Legg til ansatt</h2>
+      <p class="muted small" style="margin:0">Den ansatte får en engangskode og velger sitt eget passord i appen.</p>
+      <label class="field-label" for="iuName">Navn</label>
+      <input class="input" id="iuName" name="name" autocomplete="name">
+      <label class="field-label" for="iuEmail">E-post</label>
+      <input class="input" id="iuEmail" name="email" type="email" autocomplete="off" spellcheck="false">
+      <span class="field-label">Rolle</span>
+      <select class="select" name="role">
+        <option value="employee">Ansatt</option>
+        <option value="coordinator">Koordinator</option>
+      </select>
+      <p class="form-error" id="formError" hidden></p>
+      <div class="btnrow">
+        <span class="spacer"></span>
+        <button type="button" class="btn ghost" data-action="close-modal">Avbryt</button>
+        <button type="submit" class="btn primary">Opprett</button>
+      </div>
+    </form>`;
+  modal.showModal();
+}
+
+async function submitInviteUser(form) {
+  const knapp = form.querySelector('button[type="submit"]');
+  knapp.disabled = true;
   try {
-    const res = await fetch(apiUrl('api/infrakit/status'), { cache: 'no-store', headers: apiHeaders() });
-    ui.infrakit = res.ok ? await res.json() : null;
+    const data = await api('api/users/invite', {
+      method: 'POST',
+      body: { name: form.name.value.trim(), email: form.email.value.trim(), role: form.role.value },
+    });
+    modal.innerHTML = `
+      <h2>Engangskode klar</h2>
+      <p class="small" style="margin:0 0 12px">Gi denne koden til ${esc(data.email)}. De åpner appen, velger «Jeg har fått en engangskode» og setter sitt eget passord. Koden varer i 14 dager.</p>
+      <p class="kode">${esc(data.code)}</p>
+      <div class="btnrow">
+        <span class="spacer"></span>
+        <button type="button" class="btn primary" data-action="close-modal">Ferdig</button>
+      </div>`;
+    hentBrukere();
+  } catch (err) {
+    knapp.disabled = false;
+    showFormError(String(err.message || err));
+  }
+}
+
+async function hentBrukere() {
+  if (!erKoordinator()) return;
+  try {
+    ui.brukere = await api('api/users');
+  } catch {
+    ui.brukere = { users: [], pending: [] };
+  }
+  if (ui.tab === 'more') render();
+}
+
+async function fetchInfrakitStatus() {
+  if (!auth()) return;
+  try {
+    ui.infrakit = await api('api/infrakit/status');
   } catch {
     ui.infrakit = null;
   }
@@ -616,21 +838,14 @@ async function fetchInfrakitStatus() {
 }
 
 async function fetchMachineHours(showResult) {
+  if (!auth()) return;
   try {
-    // Prøv live-tall fra Infrakit-proxyen først, fall tilbake til fila i appmappen.
-    let res = await fetch(apiUrl('api/infrakit/hours'), { cache: 'no-store', headers: apiHeaders() }).catch(() => null);
-    if (!res || !res.ok) res = await fetch('machine-hours.json', { cache: 'no-store' });
-    if (!res.ok) {
-      if (showResult) alert('Fant verken Infrakit-tilkobling eller machine-hours.json.');
-      return;
-    }
-    const data = await res.json();
-    let days = Array.isArray(data) ? data : data.days;
-    if (days && !Array.isArray(days)) days = [days];
+    const data = await api('api/infrakit/hours');
+    const days = Array.isArray(data) ? data : data.days;
     const changed = Array.isArray(days) ? store.syncMachineHours(days) : 0;
     if (showResult) alert(changed ? `Maskintimer oppdatert (${changed} endring${changed === 1 ? '' : 'er'}).` : 'Ingen nye maskintimer.');
-  } catch {
-    if (showResult) alert('Kunne ikke hente maskintimer nå.');
+  } catch (err) {
+    if (showResult) alert(String(err.message || err));
   }
 }
 
@@ -725,12 +940,38 @@ const actions = {
   'hours-plus'() { bumpHours(0.5); },
   'sync-machines'() { fetchMachineList(); fetchInfrakitStatus(); fetchMachineHours(true); },
   'save-proxy'() {
-    const key = document.getElementById('proxyKey');
-    if (!key) return;
     const url = document.getElementById('proxyUrl');
-    lagreProxy(url ? url.value.trim() : proxyConf().url, key.value.trim().toUpperCase());
+    if (!url) return;
+    try {
+      localStorage.setItem('timeapp:proxy', JSON.stringify({ url: url.value.trim() }));
+    } catch { /* lagring utilgjengelig */ }
+    fetchInfrakitStatus();
   },
   'admin-connect'() { openConnectModal(); },
+  'login-mode'(el) {
+    ui.loginModus = el.dataset.mode;
+    ui.loginFeil = '';
+    render();
+  },
+  async logout() {
+    try { await api('api/auth/logout', { method: 'POST' }); } catch { /* uansett ut lokalt */ }
+    lagreAuth(null);
+    ui.infrakit = null;
+    ui.brukere = null;
+    ui.loginModus = 'login';
+    render();
+  },
+  'invite-user'() { openInviteUserModal(); },
+  async 'remove-user'(el) {
+    const epost = el.dataset.email;
+    if (!confirm(`Fjerne ${epost}? Personen mister tilgangen med én gang.`)) return;
+    try {
+      await api('api/users/remove', { method: 'POST', body: { email: epost } });
+      await hentBrukere();
+    } catch (err) {
+      alert(String(err.message || err));
+    }
+  },
   'close-modal'() { modal.close(); },
   export() { downloadExport(); },
   import() {
@@ -751,9 +992,54 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('submit', (e) => {
-  if (e.target.id === 'entryForm') { e.preventDefault(); saveEntryForm(e.target); }
-  if (e.target.id === 'projectForm') { e.preventDefault(); saveProjectForm(e.target); }
-  if (e.target.id === 'connectForm') { e.preventDefault(); submitConnect(e.target); }
+  const f = e.target;
+  if (f.id === 'entryForm') { e.preventDefault(); saveEntryForm(f); }
+  if (f.id === 'projectForm') { e.preventDefault(); saveProjectForm(f); }
+  if (f.id === 'connectForm') { e.preventDefault(); submitConnect(f); }
+  if (f.id === 'inviteUserForm') { e.preventDefault(); submitInviteUser(f); }
+
+  if (f.id === 'loginForm') {
+    e.preventDefault();
+    const epost = f.email.value.trim();
+    const passord = f.password.value;
+    loginFlyt(async () => {
+      if (!epost || !passord) throw new Error('Fyll inn e-post og passord.');
+      const { salt } = await api('api/auth/salt?email=' + encodeURIComponent(epost));
+      return api('api/auth/login', { method: 'POST', body: { email: epost, derivedKey: await avledNokkel(passord, salt) } });
+    });
+  }
+
+  if (f.id === 'inviteForm') {
+    e.preventDefault();
+    const kode = f.code.value.trim().toUpperCase();
+    const navn = f.name.value.trim();
+    const p1 = f.password.value;
+    const p2 = f.password2.value;
+    loginFlyt(async () => {
+      if (!kode) throw new Error('Skriv inn engangskoden.');
+      sjekkPassord(p1, p2);
+      const salt = nyttSalt();
+      return api('api/auth/accept', { method: 'POST', body: { code: kode, name: navn, salt, derivedKey: await avledNokkel(p1, salt) } });
+    });
+  }
+
+  if (f.id === 'registerForm') {
+    e.preventDefault();
+    const felt = {
+      company: f.company.value.trim(),
+      setupKey: f.setupKey.value,
+      name: f.name.value.trim(),
+      email: f.email.value.trim(),
+    };
+    const p1 = f.password.value;
+    const p2 = f.password2.value;
+    loginFlyt(async () => {
+      if (!felt.company || !felt.name || !felt.email) throw new Error('Fyll inn bedrift, navn og e-post.');
+      sjekkPassord(p1, p2);
+      const salt = nyttSalt();
+      return api('api/auth/register', { method: 'POST', body: { ...felt, salt, derivedKey: await avledNokkel(p1, salt) } });
+    });
+  }
 });
 
 document.addEventListener('input', (e) => {
@@ -787,19 +1073,24 @@ modal.addEventListener('click', (e) => {
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden) {
     render();
-    fetchMachineHours(false);
-    fetchMachineList();
+    synkFraSky();
   }
 });
+
+function synkFraSky() {
+  if (!auth()) return;
+  fetchInfrakitStatus();
+  fetchMachineList();
+  fetchMachineHours(false);
+  hentBrukere();
+}
 
 /* ---------- Oppstart ---------- */
 
 store.subscribe(render);
 if (darkQuery.addEventListener) darkQuery.addEventListener('change', render);
 render();
-fetchMachineHours(false);
-fetchMachineList();
-fetchInfrakitStatus();
+synkFraSky();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('Service worker feilet', err));

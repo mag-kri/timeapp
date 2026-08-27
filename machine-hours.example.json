@@ -1,8 +1,0 @@
-{
-  "kommentar": "Eksempel på formatet appen leser. Lagre ekte tall som machine-hours.json i appmappen – appen henter filen automatisk og fletter inn maskintimene (samme dato + maskin + prosjekt oppdateres, aldri dupliseres). Feltene start/end og note er valgfrie.",
-  "updated": "2026-08-27T10:00:00Z",
-  "days": [
-    { "date": "2026-08-25", "machine": "Volvo EC250E", "project": "Prosjekt A", "hours": 7.5, "start": "2026-08-25T07:00:00", "end": "2026-08-25T15:10:00", "note": "12 turer · 180 km" },
-    { "date": "2026-08-25", "machine": "Scania R590", "project": "Prosjekt A", "hours": 6 }
-  ]
-}

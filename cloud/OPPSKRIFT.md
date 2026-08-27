@@ -1,63 +1,81 @@
-# Sette opp skyproxyen (Cloudflare Worker)
+# Sette opp skytjenesten (Cloudflare Worker + D1)
 
-Gjør at maskindata fra Infrakit virker på mobilene, ikke bare på PC-en – og at
-**hver bedrift kobler til sin egen Infrakit-bruker**, så de ser sine egne
-prosjekter og maskiner.
+Serverdelen gir Timeapp innlogging, brukere, roller og maskindata fra Infrakit —
+for flere bedrifter samtidig, hver med sin egen Infrakit-tilgang.
 
 ## Slik henger det sammen
 
-| Rolle | Gjør én gang | Får |
+| Rolle | Gjør | Får |
 |---|---|---|
-| Du (som drifter proxyen) | Setter opp workeren under, og deler ut *oppsettkoden* til bedriftsadmins | En proxy alle bedrifter kan bruke |
-| Bedriftsadmin | Mer → Infrakit → «Koble til bedrift», logger inn med bedriftens Infrakit-bruker | En **tilgangskode** for bedriften |
-| Ansatt | Mer → Infrakit → taster tilgangskoden | Sine egne prosjekter, maskiner og timer |
+| Du (drifter tjenesten) | Setter opp workeren og deler ut *oppsettkoden* | En tjeneste alle bedrifter kan bruke |
+| Koordinator | Registrerer bedriften i appen med oppsettkoden, kobler til Infrakit med bedriftens Infrakit-innlogging, oppretter brukere | Full tilgang for sin bedrift |
+| Ansatt | Får engangskode av koordinatoren og velger sitt eget passord | Sine egne prosjekter, maskiner og timer |
 
-Passord lagres aldri. Proxyen tar vare på et fornybart token (kryptert med
-AES-GCM) og fornyer tilgangen selv – ingen ukentlig ny innlogging.
+Passord lagres aldri. Den ansattes passord forlater ikke telefonen (nøkkelen
+utledes lokalt med PBKDF2), og Infrakit-tilgangen lagres som et fornybart
+token, kryptert med AES-GCM.
 
 ## Steg (gratis, ca. 10 minutter)
 
-### 1. Lag KV-lageret (her ligger bedriftenes tilkoblinger)
+### 1. Lag databasen
 
-Cloudflare-dashbordet → **Storage & databases → KV** → **Create namespace** →
-navn `timeapp` → Add.
+Cloudflare-dashbordet → **Storage & databases → D1 SQL Database** →
+**Create** → navn `timeapp` → Create.
 
-### 2. Bind lageret til workeren
+Åpne databasen → **Console**, lim inn hele `cloud/schema.sql` og kjør.
 
-Workeren `timeapp-proxy` → **Settings → Bindings** → **Add binding** →
-**KV namespace** → Variable name: `TIMEAPP_KV`, Namespace: `timeapp` → Deploy.
+### 2. Bind databasen til workeren
 
-### 3. Legg inn de to hemmelighetene
+Workeren `timeapp-proxy` → **Bindings** → **Add binding** → **D1 database** →
+Variable name: `DB`, Database: `timeapp` → Add.
+
+*(En eventuell gammel KV-binding `TIMEAPP_KV` kan fjernes — den brukes ikke.)*
+
+### 3. Hemmeligheter
 
 **Settings → Variables and Secrets**, begge som type **Secret**:
 
-- `ENC_KEY` – krypteringsnøkkel. Lag en med denne kommandoen (den kopieres til
-  utklippstavlen, uten å vises noe sted):
+- `ENC_KEY` – krypteringsnøkkel. Lag en slik (kopieres til utklippstavlen):
 
   ```
   powershell -Command "[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Max 256 })) | Set-Clipboard"
   ```
 
-- `SETUP_KEY` – oppsettkoden du deler med bedriftsadmins (velg selv, f.eks.
-  fire tilfeldige ord). Uten den kan ingen koble en bedrift til proxyen.
+  **Endres den senere, blir lagrede Infrakit-tilkoblinger ulesbare** og
+  koordinatorene må koble til på nytt.
+
+- `SETUP_KEY` – oppsettkoden du deler med koordinatorer. Uten den kan ingen
+  registrere en bedrift.
 
 ### 4. Legg inn koden
 
 Workeren → **Edit code** → lim inn hele `cloud/worker.js` → **Deploy**.
 
-## Koble til en bedrift
+## Ta i bruk
 
-I appen (Mer → Infrakit → «Administrator: koble bedriften til Infrakit»):
-bedriftsnavn, oppsettkoden, og bedriftens Infrakit-brukernavn og passord.
-Appen viser da tilgangskoden – del den med de ansatte.
+1. Koordinatoren åpner appen → **Registrer en ny bedrift** → bedriftsnavn,
+   oppsettkoden, eget navn, e-post og passord.
+2. **Mer → Infrakit → Koble til Infrakit** med bedriftens Infrakit-innlogging.
+3. **Mer → Ansatte → + Legg til ansatt** → gi engangskoden til den ansatte.
+4. Den ansatte åpner appen → **Jeg har fått en engangskode** → setter sitt
+   eget passord.
 
 ## Sikkerhet
 
-- **Passord lagres aldri** – kun et fornybart token, kryptert med `ENC_KEY`.
-- **Bedriftene er isolert** – tilgangskoden bestemmer hvilken Infrakit-tilgang
-  som brukes, og hurtiglagringen er adskilt per bedrift.
-- **Oppsettkoden** hindrer at utenforstående kan registrere bedrifter (og at
-  proxyen misbrukes til å gjette Infrakit-passord).
-- **CORS** er låst til appens adresser – se `ALLOWED_ORIGINS` i `worker.js`.
-- Skal en bedrift kobles fra: slett nøkkelen `company:<tilgangskode>` i
-  KV-lageret.
+- **Passord**: PBKDF2 (300 000 runder) kjøres i appen; serveren ser kun den
+  avledede nøkkelen og lagrer SHA-256 av den med `ENC_KEY` som pepper.
+- **Infrakit**: kun et fornybart token lagres, AES-GCM-kryptert.
+- **Roller**: kun koordinator kan koble til Infrakit og administrere brukere.
+- **Bedriftsskille**: alle spørringer filtreres på bedriften brukeren tilhører,
+  og hurtiglagringen er adskilt per bedrift.
+- **CORS** er låst til appens adresser — se `ALLOWED_ORIGINS` i `worker.js`.
+
+## Testing
+
+`cloud/test-worker.js` (server) og `cloud/test-app.js` (app + server) kjøres i
+nettleseren mot en etterlignet database:
+
+```js
+(await import('/cloud/test-worker.js')).kjorTest()
+(await import('/cloud/test-app.js')).kjorAppTest()
+```

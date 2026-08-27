@@ -247,13 +247,23 @@ function renderMore() {
       <h2>Infrakit</h2>
       <p class="small" style="margin:0 0 8px">${
         ui.infrakit && ui.infrakit.connected
-          ? '<strong style="color:var(--good)">✓ Koblet til Infrakit-API-et</strong> – maskinlista hentes automatisk.'
+          ? '<strong style="color:var(--good)">✓ Koblet til Infrakit</strong> – maskiner, timer og dagsrapport hentes automatisk.'
           : ui.infrakit
-            ? '<strong>Ikke koblet.</strong> Kjør <code>scripts\\infrakit-login.ps1</code> på PC-en der serveren kjører, og start serveren på nytt.'
-            : 'Infrakit-synk er ikke tilgjengelig på denne serveren – maskindata krever serverdelen (PC-versjonen, eller en skyproxy).'
+            ? (ui.infrakit.proxy === 'cloudflare'
+                ? '<strong>Proxyen svarer, men mangler Infrakit-innlogging.</strong> Legg inn hemmelighetene i Cloudflare (se cloud/OPPSKRIFT.md).'
+                : '<strong>Ikke koblet.</strong> Kjør <code>scripts\\infrakit-login.ps1</code> på PC-en der serveren kjører, og start serveren på nytt.')
+            : (onLocalhost
+                ? 'Serveren svarer ikke på Infrakit-rutene.'
+                : 'Ingen skyproxy tilkoblet – legg inn adresse og tilgangskode under.')
       }</p>
-      <p class="muted small" style="margin:0 0 12px">Maskintimene leses fra <code>machine-hours.json</code> i appmappen. Be Claude oppdatere filen med ferske tall fra Infrakit.</p>
-      <button class="btn" data-action="sync-machines" style="width:100%">Oppdater maskiner og timer</button>
+      ${ui.proxy401 ? '<p class="form-error" style="margin:0 0 8px">Proxyen avviste tilgangskoden – sjekk at den er riktig.</p>' : ''}
+      ${onLocalhost ? '' : `
+      <label class="field-label" for="proxyUrl">Proxy-adresse</label>
+      <input class="input" id="proxyUrl" value="${esc(proxyConf().url || DEFAULT_PROXY)}" placeholder="https://timeapp-proxy.NAVN.workers.dev" autocomplete="off" inputmode="url">
+      <label class="field-label" for="proxyKey">Tilgangskode</label>
+      <input class="input" type="password" id="proxyKey" value="${esc(proxyConf().key || '')}" autocomplete="off">
+      <button class="btn" data-action="save-proxy" style="width:100%;margin-top:10px">Lagre tilkobling</button>`}
+      <button class="btn" data-action="sync-machines" style="width:100%;margin-top:8px">Oppdater maskiner og timer</button>
     </section>
     <section class="card">
       <h2>Data</h2>
@@ -483,10 +493,35 @@ function bumpHours(delta) {
   inp.value = d.fmtHours(next);
 }
 
-// Henter den faktiske maskinlista fra Infrakit via serverens proxy (/api/infrakit/*).
+/* --- Infrakit-proxy: lokalt (serve.ps1) eller i skyen (cloud/worker.js) --- */
+
+const DEFAULT_PROXY = ''; // fylles inn med worker-adressen når den er satt opp
+const onLocalhost = ['localhost', '127.0.0.1'].includes(location.hostname);
+
+function proxyConf() {
+  try {
+    return JSON.parse(localStorage.getItem('timeapp:proxy') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function apiUrl(path) {
+  if (onLocalhost) return path;
+  const base = String(proxyConf().url || DEFAULT_PROXY).trim().replace(/\/+$/, '');
+  return base ? base + '/' + path : path;
+}
+
+function apiHeaders() {
+  const key = proxyConf().key;
+  return key ? { 'X-Timeapp-Key': key } : {};
+}
+
+// Henter den faktiske maskinlista fra Infrakit via proxyen.
 async function fetchMachineList() {
   try {
-    const res = await fetch('api/infrakit/machines', { cache: 'no-store' });
+    const res = await fetch(apiUrl('api/infrakit/machines'), { cache: 'no-store', headers: apiHeaders() });
+    ui.proxy401 = res.status === 401;
     if (!res.ok) return;
     const data = await res.json();
     if (Array.isArray(data.machines)) {
@@ -501,7 +536,7 @@ async function fetchMachineList() {
 
 async function fetchInfrakitStatus() {
   try {
-    const res = await fetch('api/infrakit/status', { cache: 'no-store' });
+    const res = await fetch(apiUrl('api/infrakit/status'), { cache: 'no-store', headers: apiHeaders() });
     ui.infrakit = res.ok ? await res.json() : null;
   } catch {
     ui.infrakit = null;
@@ -512,7 +547,7 @@ async function fetchInfrakitStatus() {
 async function fetchMachineHours(showResult) {
   try {
     // Prøv live-tall fra Infrakit-proxyen først, fall tilbake til fila i appmappen.
-    let res = await fetch('api/infrakit/hours', { cache: 'no-store' }).catch(() => null);
+    let res = await fetch(apiUrl('api/infrakit/hours'), { cache: 'no-store', headers: apiHeaders() }).catch(() => null);
     if (!res || !res.ok) res = await fetch('machine-hours.json', { cache: 'no-store' });
     if (!res.ok) {
       if (showResult) alert('Fant verken Infrakit-tilkobling eller machine-hours.json.');
@@ -618,6 +653,18 @@ const actions = {
   'hours-minus'() { bumpHours(-0.5); },
   'hours-plus'() { bumpHours(0.5); },
   'sync-machines'() { fetchMachineList(); fetchInfrakitStatus(); fetchMachineHours(true); },
+  'save-proxy'() {
+    const url = document.getElementById('proxyUrl');
+    const key = document.getElementById('proxyKey');
+    if (!url || !key) return;
+    try {
+      localStorage.setItem('timeapp:proxy', JSON.stringify({ url: url.value.trim(), key: key.value.trim() }));
+    } catch { /* lagring utilgjengelig */ }
+    ui.proxy401 = false;
+    fetchInfrakitStatus();
+    fetchMachineList();
+    fetchMachineHours(true);
+  },
   'close-modal'() { modal.close(); },
   export() { downloadExport(); },
   import() {

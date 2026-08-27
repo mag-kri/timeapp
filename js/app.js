@@ -412,6 +412,7 @@ function renderMore() {
     </section>
     ${renderKonto()}
     ${renderInfrakitKort()}
+    ${renderIntegrasjonerKort()}
     ${erKoordinator() ? renderBrukere() : ''}
     <section class="card">
       <h2>Data</h2>
@@ -481,6 +482,30 @@ function openEntryModal(entry, date) {
   autosizeNote();
 }
 
+// Systemene et nytt prosjekt kan opprettes i samtidig. Kun koordinatorer,
+// og kun systemer bedriften faktisk er koblet til, kan hukes av.
+const EKSTERNE_SYSTEMER = [
+  { id: 'infrakit', navn: 'Infrakit' },
+  { id: 'tripletex', navn: 'Tripletex' },
+  { id: 'xsite', navn: 'Xsite MANAGE', hvorfor: 'kommer – krever API-tilgang fra Novatron' },
+  { id: 'trimble', navn: 'Trimble Connect', hvorfor: 'kommer – krever API-app hos Trimble' },
+  { id: 'makin', navn: 'Makin’', hvorfor: 'følger Infrakit-prosjektet automatisk' },
+];
+
+function sysValg() {
+  const i = ui.integrasjoner || {};
+  return `
+    <span class="field-label">Opprett også i</span>
+    ${EKSTERNE_SYSTEMER.map((s) => {
+      const pa = !s.hvorfor && !!i[s.id];
+      const hint = s.hvorfor || 'ikke koblet til – se Mer';
+      return `<label class="sysrad${pa ? '' : ' av'}">
+        <input type="checkbox" name="sys" value="${s.id}"${pa ? '' : ' disabled'}>
+        <span>${s.navn}${pa ? '' : ` <small class="muted">– ${hint}</small>`}</span>
+      </label>`;
+    }).join('')}`;
+}
+
 function openProjectModal(project) {
   const isEdit = !!project;
   const slot = isEdit ? project.color : store.nextFreeSlot();
@@ -493,6 +518,7 @@ function openProjectModal(project) {
       <div class="swatches" role="radiogroup" aria-label="Farge">
         ${PALETTE.map((c, i) => `<label class="swatch"><input type="radio" name="color" value="${i}"${i === slot ? ' checked' : ''} aria-label="${c.name}"><span style="background:${isDark() ? c.dark : c.light}"></span></label>`).join('')}
       </div>
+      ${!isEdit && erKoordinator() ? sysValg() : ''}
       <p class="form-error" id="formError" hidden></p>
       <div class="btnrow">
         ${isEdit ? `<button type="button" class="btn ghost danger-text" data-action="delete-project" data-id="${project.id}">Slett</button>` : ''}
@@ -645,9 +671,30 @@ function saveProjectForm(form) {
   }
   const color = Number(form.color.value);
   const id = form.dataset.editId;
+  const systemer = [...form.querySelectorAll('input[name="sys"]:checked')].map((c) => c.value);
   if (id) store.updateProject(id, { name, color });
   else store.addProject(name, color);
   modal.close();
+  if (!id && systemer.length) opprettEksternt(name, systemer);
+}
+
+// Oppretter prosjektet i valgte eksterne systemer via skyen, og melder fra
+// per system. Det lokale prosjektet er allerede lagret uansett utfall.
+async function opprettEksternt(navn, systemer) {
+  const visNavn = (id) => (EKSTERNE_SYSTEMER.find((s) => s.id === id) || { navn: id }).navn;
+  try {
+    const svar = await api('api/prosjekt/opprett', { method: 'POST', body: { name: navn, systems: systemer } });
+    const linjer = Object.entries(svar.resultat || {}).map(([s, r]) => r.ok
+      ? `✓ ${visNavn(s)}: opprettet${r.nummer ? ' (prosjektnr. ' + r.nummer + ')' : ''}`
+      : `✗ ${visNavn(s)}: ${r.feil}`);
+    alert(`«${navn}»\n${linjer.join('\n')}`);
+    if (svar.resultat?.infrakit?.ok) {
+      fetchMachineList();
+      fetchInfrakitStatus();
+    }
+  } catch (err) {
+    alert(`Fikk ikke opprettet «${navn}» i andre systemer: ${String(err.message || err)}`);
+  }
 }
 
 /* ---------- Hjelpere ---------- */
@@ -789,6 +836,73 @@ async function submitConnect(form) {
     knapp.textContent = 'Koble til';
     showFormError(String(err.message || err));
   }
+}
+
+// Andre fagsystemer bedriften kan koble til for prosjektoppretting.
+function renderIntegrasjonerKort() {
+  const i = ui.integrasjoner || {};
+  const rad = (navn, innhold) => `<div class="integrad"><strong>${navn}</strong><span class="muted small">${innhold}</span></div>`;
+  return `
+    <section class="card">
+      <h2>Andre systemer</h2>
+      <p class="muted small" style="margin:0 0 4px">Huk av når du lager et nytt prosjekt, så opprettes det samtidig i systemene under.</p>
+      ${rad('Tripletex', i.tripletex
+        ? `<strong style="color:var(--good)">✓ Tilkoblet</strong>${i.tripletexBy ? ' (av ' + esc(i.tripletexBy) + ')' : ''}`
+        : 'Ikke koblet til ennå')}
+      ${erKoordinator() ? `<button class="btn${i.tripletex ? '' : ' primary'}" data-action="connect-tripletex" style="width:100%;margin-bottom:4px">${i.tripletex ? 'Koble til Tripletex på nytt …' : 'Koble til Tripletex …'}</button>` : ''}
+      ${rad('Xsite MANAGE', 'Kommer – krever API-tilgang fra Novatron (manage@novatron.fi)')}
+      ${rad('Trimble Connect', 'Kommer – krever API-app hos Trimble Developer')}
+      ${rad('Makin’', 'Maskinene følger Infrakit-prosjektene automatisk')}
+    </section>`;
+}
+
+// Koordinator kobler bedriften til Tripletex med API-tokens.
+function openTripletexModal() {
+  modal.innerHTML = `
+    <form id="tripletexForm" novalidate>
+      <h2>Koble til Tripletex</h2>
+      <p class="muted small" style="margin:0">Bruk integrasjonens consumer token og et employee token fra Tripletex (Min profil → API-tilgang). Tokenene lagres kryptert og brukes kun til å opprette prosjekter. Den ansatte tokenet tilhører blir prosjektleder for nye prosjekter.</p>
+      <label class="field-label" for="ttCons">Consumer token</label>
+      <input class="input" id="ttCons" name="consumerToken" type="password" autocomplete="off" spellcheck="false">
+      <label class="field-label" for="ttEmp">Employee token</label>
+      <input class="input" id="ttEmp" name="employeeToken" type="password" autocomplete="off" spellcheck="false">
+      <p class="form-error" id="formError" hidden></p>
+      <div class="btnrow">
+        <span class="spacer"></span>
+        <button type="button" class="btn ghost" data-action="close-modal">Avbryt</button>
+        <button type="submit" class="btn primary">Koble til</button>
+      </div>
+    </form>`;
+  modal.showModal();
+}
+
+async function submitTripletex(form) {
+  const knapp = form.querySelector('button[type="submit"]');
+  knapp.disabled = true;
+  knapp.textContent = 'Kobler til …';
+  try {
+    const data = await api('api/integrasjoner/tripletex', {
+      method: 'POST',
+      body: { consumerToken: form.consumerToken.value.trim(), employeeToken: form.employeeToken.value.trim() },
+    });
+    modal.close();
+    alert(`Koblet til Tripletex – nye prosjekter får ${data.ansatt} som prosjektleder.`);
+    fetchIntegrasjoner();
+  } catch (err) {
+    knapp.disabled = false;
+    knapp.textContent = 'Koble til';
+    showFormError(String(err.message || err));
+  }
+}
+
+async function fetchIntegrasjoner() {
+  if (!auth()) return;
+  try {
+    ui.integrasjoner = await api('api/integrasjoner');
+  } catch {
+    ui.integrasjoner = null;
+  }
+  if (ui.tab === 'more') render();
 }
 
 // Koordinator oppretter bruker til en ansatt og får en engangskode.
@@ -1019,6 +1133,7 @@ const actions = {
     fetchInfrakitStatus();
   },
   'admin-connect'() { openConnectModal(); },
+  'connect-tripletex'() { openTripletexModal(); },
   'login-mode'(el) {
     ui.loginModus = el.dataset.mode;
     ui.loginFeil = '';
@@ -1028,6 +1143,7 @@ const actions = {
     try { await api('api/auth/logout', { method: 'POST' }); } catch { /* uansett ut lokalt */ }
     lagreAuth(null);
     ui.infrakit = null;
+    ui.integrasjoner = null;
     ui.brukere = null;
     ui.loginModus = 'login';
     render();
@@ -1067,6 +1183,7 @@ document.addEventListener('submit', (e) => {
   if (f.id === 'entryForm') { e.preventDefault(); saveEntryForm(f); }
   if (f.id === 'projectForm') { e.preventDefault(); saveProjectForm(f); }
   if (f.id === 'connectForm') { e.preventDefault(); submitConnect(f); }
+  if (f.id === 'tripletexForm') { e.preventDefault(); submitTripletex(f); }
   if (f.id === 'inviteUserForm') { e.preventDefault(); submitInviteUser(f); }
 
   if (f.id === 'loginForm') {
@@ -1151,6 +1268,7 @@ document.addEventListener('visibilitychange', () => {
 function synkFraSky() {
   if (!auth()) return;
   fetchInfrakitStatus();
+  fetchIntegrasjoner();
   fetchMachineList();
   fetchMachineHours(false);
   hentBrukere();

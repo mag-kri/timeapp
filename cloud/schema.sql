@@ -40,3 +40,12 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_email ON sessions(email);
+
+CREATE TABLE IF NOT EXISTS integrations (
+  company_id   TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  system       TEXT NOT NULL,             -- f.eks. 'tripletex'
+  config       TEXT NOT NULL,             -- tokens m.m., AES-GCM-kryptert JSON
+  connected_by TEXT,
+  connected_at TEXT,
+  PRIMARY KEY (company_id, system)
+);

@@ -3,7 +3,7 @@ export async function kjorTimeTest() {
   const src = await fetch('cloud/worker.js?v=' + Date.now()).then((r) => r.text());
   const mod = await import(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
 
-  const db = { companies: new Map(), users: new Map(), invites: new Map(), sessions: new Map() };
+  const db = { companies: new Map(), users: new Map(), invites: new Map(), sessions: new Map(), integrations: new Map() };
   const norm = (s) => s.replace(/\s+/g, ' ').trim();
   const DB = {
     prepare(sql) {
@@ -20,6 +20,9 @@ export async function kjorTimeTest() {
             const u = db.users.get(s.email);
             return u ? { token: s.token, ...u } : null;
           }
+          if (q.startsWith('SELECT config FROM integrations') || q.startsWith('SELECT connected_by FROM integrations')) {
+            return db.integrations.get(a[0] + ':' + a[1]) || null;
+          }
           return null;
         },
         async all() { return { results: [] }; },
@@ -28,6 +31,7 @@ export async function kjorTimeTest() {
           else if (q.startsWith('INSERT INTO users')) db.users.set(a[0], { email: a[0], name: a[1], company_id: a[2], role: a[3], salt: a[4], verifier: a[5], created_at: a[6] });
           else if (q.startsWith('INSERT INTO sessions')) db.sessions.set(a[0], { token: a[0], email: a[1], expires_at: a[2] });
           else if (q.startsWith('UPDATE companies SET refresh_token = ?, connected_by')) { const c = db.companies.get(a[3]); if (c) c.refresh_token = a[0]; }
+          else if (q.startsWith('INSERT INTO integrations')) db.integrations.set(a[0] + ':' + a[1], { config: a[2], connected_by: a[3] });
           return { success: true };
         },
       };
@@ -46,7 +50,22 @@ export async function kjorTimeTest() {
     if (url.startsWith('https://iam.infrakit.com')) {
       return new Response(JSON.stringify({ accessToken: 'AT', refreshToken: 'RT', expiresIn: 3600 }), { status: 200 });
     }
+    if (url.startsWith('https://tripletex.no')) {
+      if (url.includes('/token/session/:create')) return new Response(JSON.stringify({ value: { token: 'TTOEKT' } }), { status: 200 });
+      if (url.includes('whoAmI')) return new Response(JSON.stringify({ value: { employee: { id: 42, firstName: 'Kari', lastName: 'Kontor' } } }), { status: 200 });
+      if (url.endsWith('/v2/project') && o && o.method === 'POST') {
+        const inn = JSON.parse(o.body);
+        if (!inn.name || !inn.projectManager || !inn.projectManager.id) return new Response(JSON.stringify({ message: 'mangler felt' }), { status: 400 });
+        return new Response(JSON.stringify({ value: { id: 7, number: '2044', name: inn.name } }), { status: 200 });
+      }
+      return new Response('{}', { status: 404 });
+    }
     if (!url.includes('infrakit.com/kuura')) return ekte(u, o);
+    if (url.endsWith('/v1/project') && o && o.method === 'POST') {
+      const inn = JSON.parse(o.body);
+      if (!inn.name) return new Response(JSON.stringify({ errorMessage: 'Parameters are invalid.' }), { status: 400 });
+      return new Response(JSON.stringify({ status: true, uuid: 'nyttp', id: 99 }), { status: 200 });
+    }
     kall.push(url.split('/kuura')[1].split('&start')[0]);
     if (url.includes('/ajax_projects.json')) {
       return new Response(JSON.stringify([
@@ -124,6 +143,12 @@ export async function kjorTimeTest() {
   const kunP2 = await kallApi('/api/infrakit/hours?projectId=2', { token });
   const kallPerProsjekt = kall.length;
 
+  // Integrasjoner: koble Tripletex, sjekk status, opprett prosjekt i tre systemer
+  const integFoer = await kallApi('/api/integrasjoner', { token });
+  const kobleTT = await kallApi('/api/integrasjoner/tripletex', { method: 'POST', token, body: { consumerToken: 'ct', employeeToken: 'et' } });
+  const integEtter = await kallApi('/api/integrasjoner', { token });
+  const opprett = await kallApi('/api/prosjekt/opprett', { method: 'POST', token, body: { name: 'Testfelt 42', systems: ['infrakit', 'tripletex', 'xsite'] } });
+
   window.fetch = ekte;
   const dager = timer.data?.days || [];
   return {
@@ -144,5 +169,9 @@ export async function kjorTimeTest() {
     prosjektbytter: byttelogg,
     aktivtProsjektTilSlutt: aktivtProsjekt,
     satteTilbake: aktivtProsjekt === 1,
+    integrasjonerFoer: integFoer.data,
+    tripletexKobling: kobleTT.data,
+    integrasjonerEtter: integEtter.data,
+    opprettelse: opprett.data && opprett.data.resultat,
   };
 }

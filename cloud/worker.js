@@ -21,6 +21,9 @@
 //   GET  /api/infrakit/status   status for innlogget bruker
 //   GET  /api/infrakit/machines bedriftens maskiner
 //   GET  /api/infrakit/hours    bedriftens maskintimer
+//   GET  /api/integrasjoner     hvilke systemer bedriften er koblet til
+//   POST /api/integrasjoner/tripletex  koordinator: lagre Tripletex-tokens
+//   POST /api/prosjekt/opprett  koordinator: opprett prosjekt i valgte systemer
 //
 // Bindinger i Cloudflare:
 //   D1-database bundet som  DB          (skjema: cloud/schema.sql)
@@ -31,10 +34,11 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 7;
+const VERSJON = 8;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
+const TT = 'https://tripletex.no/v2';
 const ALLOWED_ORIGINS = ['https://mag-kri.github.io', 'http://localhost:8613'];
 const KODE_ALFABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const OEKT_LEVETID = 30 * 24 * 3600;
@@ -211,6 +215,51 @@ async function ikPost(sti, token) {
   const r = await fetch(IK + sti, { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
   return r.ok;
 }
+
+/* ---------- Tripletex ---------- */
+
+// Tripletex bruker to tokens (consumer + employee) som byttes i et
+// sesjonstoken. Sesjonen brukes som passord i Basic-auth med brukernavn 0.
+async function tripletexKonfig(env, companyId) {
+  const rad = await spor(env, 'SELECT config FROM integrations WHERE company_id = ? AND system = ?',
+    companyId, 'tripletex').first();
+  if (!rad) return null;
+  try { return JSON.parse(await dekrypter(env, rad.config)); } catch { return null; }
+}
+
+async function tripletexAuth(companyId, cfg) {
+  const bufret = tokenCache.get(companyId + ':tt');
+  if (bufret && bufret.expiresAt > Date.now()) return bufret.auth;
+  const utloep = new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10);
+  const q = new URLSearchParams({
+    consumerToken: cfg.consumerToken, employeeToken: cfg.employeeToken, expirationDate: utloep,
+  });
+  const r = await fetch(TT + '/token/session/:create?' + q.toString(), { method: 'PUT' });
+  const j = await r.json().catch(() => null);
+  const token = j && j.value && j.value.token;
+  if (!r.ok || !token) {
+    throw new Error('Tripletex avviste tokenene (HTTP ' + r.status + ')');
+  }
+  const auth = 'Basic ' + btoa('0:' + token);
+  tokenCache.set(companyId + ':tt', { auth, expiresAt: Date.now() + 12 * 3600000 });
+  return auth;
+}
+
+async function tripletexKall(auth, sti, method, body) {
+  const r = await fetch(TT + sti, {
+    method: method || 'GET',
+    headers: { Authorization: auth, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const j = await r.json().catch(() => null);
+  if (!r.ok) {
+    const detalj = j && (j.message || (j.validationMessages || []).map((v) => v.message).join('; '));
+    throw new Error('Tripletex svarte ' + r.status + (detalj ? ': ' + detalj : ''));
+  }
+  return j;
+}
+
+/* ---------- Infrakit timehenting ---------- */
 
 // Cloudflare tillater maks 50 utgaaende kall per forespoersel, saa timehentingen
 // holder regnskap og prioriterer maskinene med mest aktivitet.
@@ -630,7 +679,8 @@ export default {
         return json({ ok: true });
       }
 
-      if (sti.startsWith('/api/users') || sti.startsWith('/api/infrakit')) {
+      if (sti.startsWith('/api/users') || sti.startsWith('/api/infrakit')
+        || sti.startsWith('/api/integrasjoner') || sti.startsWith('/api/prosjekt')) {
         if (!oekt) return json({ error: 'Ikke innlogget' }, 401);
       }
 
@@ -737,6 +787,98 @@ export default {
         } catch (err) {
           return json({ error: 'Infrakit-kallet feilet: ' + (err.message || err) }, 502);
         }
+      }
+
+      /* --- Integrasjoner og prosjektoppretting --- */
+
+      if (sti === '/api/integrasjoner') {
+        const tt = await spor(env, 'SELECT connected_by FROM integrations WHERE company_id = ? AND system = ?',
+          oekt.bruker.company_id, 'tripletex').first();
+        return json({
+          infrakit: Boolean(oekt.bedrift.refresh_token),
+          tripletex: Boolean(tt),
+          tripletexBy: tt ? tt.connected_by || null : null,
+        });
+      }
+
+      if (sti === '/api/integrasjoner/tripletex' && request.method === 'POST') {
+        if (!kunKoordinator()) return json({ error: 'Kun koordinator kan koble til Tripletex' }, 403);
+        const inn = await lesInn();
+        if (!inn) return json({ error: 'Ugyldig forespoersel' }, 400);
+        const ct = String(inn.consumerToken || '').trim();
+        const et = String(inn.employeeToken || '').trim();
+        if (!ct || !et) return json({ error: 'Mangler consumer token eller employee token' }, 400);
+        try {
+          tokenCache.delete(oekt.bruker.company_id + ':tt');
+          const auth = await tripletexAuth(oekt.bruker.company_id, { consumerToken: ct, employeeToken: et });
+          // Den ansatte tokenet tilhoerer blir prosjektleder for nye prosjekter
+          const hvem = await tripletexKall(auth, '/token/session/%3EwhoAmI?fields=employee(id,firstName,lastName)');
+          const ansatt = hvem && hvem.value && hvem.value.employee;
+          if (!ansatt || !ansatt.id) return json({ error: 'Tokenet mangler tilknyttet ansatt i Tripletex' }, 502);
+          const cfg = await krypter(env, JSON.stringify({ consumerToken: ct, employeeToken: et, ansattId: ansatt.id }));
+          await spor(env,
+            `INSERT INTO integrations (company_id, system, config, connected_by, connected_at) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(company_id, system) DO UPDATE SET config = excluded.config,
+             connected_by = excluded.connected_by, connected_at = excluded.connected_at`,
+            oekt.bruker.company_id, 'tripletex', cfg, oekt.bruker.email, iso()).run();
+          const navn = [ansatt.firstName, ansatt.lastName].filter(Boolean).join(' ');
+          return json({ connected: true, ansatt: navn || String(ansatt.id) });
+        } catch (err) {
+          return json({ error: String(err.message || err) }, 502);
+        }
+      }
+
+      if (sti === '/api/prosjekt/opprett' && request.method === 'POST') {
+        if (!kunKoordinator()) return json({ error: 'Kun koordinator kan opprette prosjekter i andre systemer' }, 403);
+        const inn = await lesInn();
+        const navn = String((inn && inn.name) || '').trim().slice(0, 120);
+        const systemer = Array.isArray(inn && inn.systems) ? inn.systems.map(String) : [];
+        if (!navn) return json({ error: 'Mangler prosjektnavn' }, 400);
+        if (!systemer.length) return json({ error: 'Ingen systemer valgt' }, 400);
+        const resultat = {};
+
+        if (systemer.includes('infrakit')) {
+          try {
+            if (!oekt.bedrift.refresh_token) throw new Error('bedriften er ikke koblet til Infrakit');
+            const token = await accessToken(env, oekt.bedrift);
+            const r = await fetch(IK + '/v1/project', {
+              method: 'POST',
+              headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: navn }),
+            });
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || j.status === false) {
+              throw new Error((j && j.errorMessage) || 'Infrakit svarte ' + r.status);
+            }
+            // Nye lister neste gang appen henter prosjekter og maskiner
+            dataCache.delete(oekt.bedrift.id + ':machines');
+            dataCache.delete(oekt.bedrift.id + ':projects');
+            resultat.infrakit = { ok: true, id: j.id || null, uuid: j.uuid || null };
+          } catch (err) {
+            resultat.infrakit = { ok: false, feil: String(err.message || err) };
+          }
+        }
+
+        if (systemer.includes('tripletex')) {
+          try {
+            const cfg = await tripletexKonfig(env, oekt.bruker.company_id);
+            if (!cfg) throw new Error('bedriften er ikke koblet til Tripletex');
+            const auth = await tripletexAuth(oekt.bruker.company_id, cfg);
+            const pr = await tripletexKall(auth, '/project', 'POST', {
+              name: navn,
+              projectManager: { id: cfg.ansattId },
+            });
+            const v = pr && pr.value;
+            resultat.tripletex = { ok: true, nummer: v ? v.number || v.id || null : null };
+          } catch (err) {
+            resultat.tripletex = { ok: false, feil: String(err.message || err) };
+          }
+        }
+
+        for (const s of systemer) {
+          if (!resultat[s]) resultat[s] = { ok: false, feil: 'ikke stoettet ennaa' };
+        }
+        return json({ resultat });
       }
 
       return json({ error: 'ukjent rute' }, 404);

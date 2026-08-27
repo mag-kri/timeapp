@@ -536,30 +536,40 @@ function refreshMachineSelect() {
   maybePrefillMachineHours();
 }
 
+// Setter et felt fra Infrakit, men rører aldri noe brukeren har skrevet selv.
+// Tom verdi rydder bort en tidligere auto-utfylling.
+function settAutoFelt(felt, verdi) {
+  if (!felt) return;
+  const forrige = felt.dataset.auto || '';
+  if (felt.value && felt.value !== forrige) return;
+  felt.value = verdi;
+  felt.dataset.auto = verdi;
+}
+
 function maybePrefillMachineHours() {
   const form = document.getElementById('entryForm');
   if (!form || !form.machine) return;
   const hint = document.getElementById('machineHint');
   const machine = form.machine.value.trim();
+  const isNew = !form.dataset.editId;
+  const hit = machine ? infrakitEntryFor(form.date.value, machine) : null;
+
+  if (isNew) {
+    // Uten treff tømmes det vi selv fylte inn, så tall fra forrige maskin ikke blir stående
+    settAutoFelt(form.hours, hit ? d.fmtHours(hit.hours) : '');
+    settAutoFelt(form.timeStart, hit && hit.start ? d.fmtTime(hit.start) : '');
+    settAutoFelt(form.timeEnd, hit && hit.end ? d.fmtTime(hit.end) : '');
+    settAutoFelt(form.note, hit ? (hit.note || '') : '');
+    autosizeNote();
+    if (hit && hit.projectId && form.projectId) form.projectId.value = hit.projectId;
+  }
+
   if (!machine) {
     if (hint) hint.hidden = true;
     return;
   }
-  const hit = infrakitEntryFor(form.date.value, machine);
-  const isNew = !form.dataset.editId;
+
   if (hit) {
-    if (isNew) {
-      form.hours.value = d.fmtHours(hit.hours);
-      if (form.projectId) form.projectId.value = hit.projectId || '';
-      if (form.timeStart && hit.start) form.timeStart.value = d.fmtTime(hit.start);
-      if (form.timeEnd && hit.end) form.timeEnd.value = d.fmtTime(hit.end);
-      // Fyll notatet automatisk, men aldri over noe brukeren har skrevet selv
-      if (form.note && (!form.note.value || form.note.value === (form.note.dataset.auto || ''))) {
-        form.note.value = hit.note || '';
-        form.note.dataset.auto = hit.note || '';
-        autosizeNote();
-      }
-    }
     if (hint) {
       hint.textContent = `Infrakit: ${d.fmtHours(hit.hours)} t på denne maskinen denne dagen${isNew ? ' – fylt inn automatisk.' : '.'}`;
       hint.hidden = false;

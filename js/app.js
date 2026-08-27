@@ -495,7 +495,7 @@ function bumpHours(delta) {
 
 /* --- Infrakit-proxy: lokalt (serve.ps1) eller i skyen (cloud/worker.js) --- */
 
-const DEFAULT_PROXY = ''; // fylles inn med worker-adressen når den er satt opp
+const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const onLocalhost = ['localhost', '127.0.0.1'].includes(location.hostname);
 
 function proxyConf() {

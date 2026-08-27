@@ -1,0 +1,5 @@
+# Lokal Infrakit-API-nøkkel – skal aldri sjekkes inn eller publiseres
+infrakit-config.json
+
+# Levende maskindata (genereres lokalt, hører ikke hjemme i repoet)
+machine-hours.json

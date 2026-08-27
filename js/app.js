@@ -718,6 +718,7 @@ async function fetchMachineList() {
   if (!auth()) return;
   try {
     const data = await api('api/infrakit/machines');
+    if (Array.isArray(data.projects)) store.ensureProjects(data.projects);
     if (Array.isArray(data.machines)) {
       store.saveMachineList(
         data.machines

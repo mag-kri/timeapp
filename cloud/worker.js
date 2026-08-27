@@ -204,6 +204,10 @@ async function ik(sti, token) {
   return r.json();
 }
 
+// Cloudflare tillater maks 50 utgaaende kall per forespoersel, saa timehentingen
+// holder regnskap og prioriterer maskinene med mest aktivitet.
+const MAKS_KALL = 44;
+
 const osloFmt = new Intl.DateTimeFormat('sv-SE', {
   timeZone: 'Europe/Oslo', year: 'numeric', month: '2-digit', day: '2-digit',
 });
@@ -227,19 +231,46 @@ async function buildMachines(token) {
   }
   return JSON.stringify({
     updated: iso(),
+    projects: plist.map((p) => String(p.name)).filter(Boolean).sort((a, b) => a.localeCompare(b, 'nb')),
     machines: [...machines.values()].sort((a, b) => a.name.localeCompare(b.name, 'nb')),
   });
 }
 
 async function buildHours(token) {
-  const veh = await ik('/ajax_vehicles.json', token);
-  const vlist = veh.vehicles || [];
   const endMs = Date.now() + 86400000;
   const startMs = endMs - 15 * 86400000;
   const days = [];
   const areaMaps = new Map();
+  let kall = 0;
+  const budsjett = () => kall < MAKS_KALL;
 
-  for (const v of vlist) {
+  // Kjoretoylista er bundet til ett prosjekt om gangen, saa vi spoer per prosjekt.
+  const pr = await ik('/ajax_projects.json', token);
+  kall++;
+  const plist = Array.isArray(pr) ? pr : pr.projects || [];
+  const kjoretoy = new Map(); // id -> kjoretoy + prosjekt
+
+  for (const p of plist) {
+    if (!budsjett()) break;
+    try {
+      const veh = await ik('/ajax_vehicles.json?projectId=' + p.id, token);
+      kall++;
+      for (const v of veh.vehicles || []) {
+        if (!v.id || kjoretoy.has(v.id)) continue;
+        kjoretoy.set(v.id, { v, projectName: String(p.name || ''), projectUuid: String(p.uuid || '') });
+      }
+    } catch { /* hopp over prosjekt uten tilgang */ }
+  }
+
+  // Prioriter maskinene som faktisk har vaert i drift den siste tiden
+  const grense = Date.now() - 16 * 86400000;
+  const vlist = [...kjoretoy.values()]
+    .filter((x) => Number(x.v.worktimeLastWeek) > 0 || Number(x.v.lastReport) > grense || Number(x.v.lastActive) > grense)
+    .sort((a, b) => (Number(b.v.worktimeLastWeek) || 0) - (Number(a.v.worktimeLastWeek) || 0));
+
+  for (const post of vlist) {
+    if (!budsjett()) break;
+    const v = post.v;
     try {
       const per = new Map();
       const bucket = (dag) => {
@@ -248,6 +279,7 @@ async function buildHours(token) {
       };
 
       const ev = await ik(`/ajax_calendar_events.json?vehicleId=${v.id}&start=${startMs}&end=${endMs}`, token);
+      kall++;
       for (const e of ev.events || []) {
         if (!e.start || !e.end) continue;
         const ms = new Date(String(e.end).replace(' ', 'T')) - new Date(String(e.start).replace(' ', 'T'));
@@ -261,7 +293,9 @@ async function buildHours(token) {
       }
 
       try {
+        if (!per.size || !budsjett()) throw new Error('hopp over');
         const mev = await ik(`/ajax_calendar_active_model_events.json?vehicleId=${v.id}&start=${startMs}&end=${endMs}`, token);
+        kall++;
         for (const m of mev.events || []) {
           const navn = String(m.title || '').trim();
           if (!m.start || !navn) continue;
@@ -270,45 +304,54 @@ async function buildHours(token) {
         }
       } catch { /* modeller er valgfritt */ }
 
-      if (v.activeProject && v.uuid) {
-        const pu = String(v.activeProject.uuid);
-        if (!areaMaps.has(pu)) {
-          const map = new Map();
+      const pu = post.projectUuid || (v.activeProject ? String(v.activeProject.uuid) : '');
+      if (pu && per.size && v.uuid) {
+        // Turer og omraader hentes en gang per prosjekt og gjenbrukes
+        if (!areaMaps.has(pu) && budsjett()) {
+          const map = { omrader: new Map(), turer: new Map() };
           try {
             const ar = await ik('/v1/project/' + pu + '/areas', token);
-            for (const a of ar.areas || []) if (a.uuid && a.title) map.set(String(a.uuid), String(a.title).trim());
+            kall++;
+            for (const a of ar.areas || []) if (a.uuid && a.title) map.omrader.set(String(a.uuid), String(a.title).trim());
           } catch { /* omrader er valgfritt */ }
+          try {
+            let page = 1;
+            let batch;
+            do {
+              const tr = await ik(`/v1/project/${pu}/trips?start=${startMs}&end=${endMs}&page=${page}&pageSize=100`, token);
+              kall++;
+              batch = tr.trips || [];
+              for (const t of batch) {
+                const nokkel = String(t.equipmentUuid || '');
+                if (!nokkel) continue;
+                if (!map.turer.has(nokkel)) map.turer.set(nokkel, []);
+                map.turer.get(nokkel).push(t);
+              }
+              page++;
+            } while (batch.length === 100 && page <= 5 && budsjett());
+          } catch { /* turer er valgfritt */ }
           areaMaps.set(pu, map);
         }
-        const amap = areaMaps.get(pu);
-        try {
-          let page = 1;
-          let batch;
-          do {
-            const tr = await ik(`/v1/project/${pu}/trips?start=${startMs}&end=${endMs}&equipmentUuid=${v.uuid}&page=${page}&pageSize=100`, token);
-            batch = tr.trips || [];
-            for (const t of batch) {
-              if (!t.startMillis) continue;
-              const dag = osloDate(Number(t.startMillis));
-              if (!per.has(dag)) continue;
-              const d = per.get(dag);
-              d.turer++;
-              if (t.distance) d.km += Number(t.distance) / 1000;
-              const mnavn = String(t.material || '').trim();
-              if (mnavn) d.mat.set(mnavn, (d.mat.get(mnavn) || 0) + 1);
-              const fra = t.startAreaUuid ? amap.get(String(t.startAreaUuid)) : null;
-              const til = t.endAreaUuid ? amap.get(String(t.endAreaUuid)) : null;
-              if (fra || til) {
-                const rute = fra && til ? fra + ARROW + til : fra ? fra + ' (kun lastet)' : '(ukjent)' + ARROW + til;
-                d.ruter.set(rute, (d.ruter.get(rute) || 0) + 1);
-              }
-            }
-            page++;
-          } while (batch.length === 100 && page <= 10);
-        } catch { /* turer er valgfritt */ }
+        const pdata = areaMaps.get(pu);
+        for (const t of (pdata && pdata.turer.get(String(v.uuid))) || []) {
+          if (!t.startMillis) continue;
+          const dag = osloDate(Number(t.startMillis));
+          if (!per.has(dag)) continue;
+          const d = per.get(dag);
+          d.turer++;
+          if (t.distance) d.km += Number(t.distance) / 1000;
+          const mnavn = String(t.material || '').trim();
+          if (mnavn) d.mat.set(mnavn, (d.mat.get(mnavn) || 0) + 1);
+          const fra = t.startAreaUuid ? pdata.omrader.get(String(t.startAreaUuid)) : null;
+          const til = t.endAreaUuid ? pdata.omrader.get(String(t.endAreaUuid)) : null;
+          if (fra || til) {
+            const rute = fra && til ? fra + ARROW + til : fra ? fra + ' (kun lastet)' : '(ukjent)' + ARROW + til;
+            d.ruter.set(rute, (d.ruter.get(rute) || 0) + 1);
+          }
+        }
       }
 
-      const projName = v.activeProject ? String(v.activeProject.name) : null;
+      const projName = post.projectName || (v.activeProject ? String(v.activeProject.name) : null);
       for (const [dag, d] of per) {
         const linjer = [];
         const deler = [];
@@ -372,7 +415,6 @@ export default {
     const url = new URL(request.url);
     const sti = url.pathname.replace(/\/+$/, '');
     const json = (obj, status = 200) => new Response(JSON.stringify(obj), { status, headers: cors });
-    const svar = (r) => json(r.body, r.status);
     const lesInn = async () => {
       try { return await request.json(); } catch { return null; }
     };

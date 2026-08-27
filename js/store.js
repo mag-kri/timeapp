@@ -316,6 +316,21 @@ export function cachedMachineList() {
 
 // Maskiner som hører til ett bestemt prosjekt (per Infrakit), pluss maskiner
 // som alt er brukt i føringer på prosjektet. Uten prosjekt: alle maskiner.
+// Oppretter prosjekter fra Infrakit som ikke finnes lokalt fra før.
+// Egne prosjekter røres ikke, og ingenting slettes.
+export function ensureProjects(names) {
+  let lagt = 0;
+  for (const navn of names) {
+    const rent = String(navn || '').trim().slice(0, 60);
+    if (!rent) continue;
+    if (state.projects.some((p) => p.name.trim().toLowerCase() === rent.toLowerCase())) continue;
+    state.projects.push({ id: uid(), name: rent, color: nextFreeSlot() });
+    lagt++;
+  }
+  if (lagt) commit();
+  return lagt;
+}
+
 export function machinesForProject(projectName) {
   const cached = cachedMachineList();
   let names;

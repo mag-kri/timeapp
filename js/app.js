@@ -1,6 +1,6 @@
-import * as store from './store.js?v=18';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=18';
-import * as d from './dates.js?v=18';
+import * as store from './store.js?v=19';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=19';
+import * as d from './dates.js?v=19';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
@@ -985,7 +985,7 @@ function maybePrefillMachineHours() {
     settAutoFelt(form.hours, hit ? d.fmtHours(hit.hours) : '');
     settAutoFelt(form.timeStart, hit && hit.start ? d.fmtTime(hit.start) : '');
     settAutoFelt(form.timeEnd, hit && hit.end ? d.fmtTime(hit.end) : '');
-    settAutoFelt(form.note, hit ? (hit.note || '') : '');
+    settAutoFelt(form.note, hit ? vinduNotat(hit, form.timeStart.value, form.timeEnd.value) : '');
     autosizeNote();
     if (hit && hit.projectId && form.projectId) form.projectId.value = hit.projectId;
   }
@@ -1141,6 +1141,63 @@ async function opprettEksternt(navn, systemer) {
 
 /* ---------- Hjelpere ---------- */
 
+// Notat tilpasset tidsvinduet: kun modellene som overlapper start–slutt,
+// med tid klippet til vinduet. Punkter kan ikke deles på klokkeslett og
+// merkes derfor som dagstall. Hele dagen valgt -> originalnotatet.
+function vinduNotat(hit, fra, til) {
+  if (!fra || !til || !Array.isArray(hit.models) || !hit.models.length) return hit.note || '';
+  const heleDagen = hit.start && hit.end && fra === d.fmtTime(hit.start) && til === d.fmtTime(hit.end);
+  if (heleDagen) return hit.note || '';
+  const min = (t) => { const [h, m] = String(t).split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+  const fraM = min(fra);
+  const tilM = min(til);
+  if (tilM <= fraM) return hit.note || '';
+  const timerAv = (minutter) => d.fmtHours(Math.round((minutter / 60) * 100) / 100) + ' t';
+
+  const modLinjer = [];
+  let modMin = 0;
+  for (const m of hit.models) {
+    if (!m.from) continue;
+    const start = min(m.from);
+    const slutt = start + Math.round((Number(m.hours) || 0) * 60);
+    const oFra = Math.max(start, fraM);
+    const oTil = Math.min(Math.max(slutt, start), tilM);
+    if (oTil <= oFra) continue;
+    const varighet = oTil - oFra;
+    modMin += varighet;
+    const visFra = `${String(Math.floor(oFra / 60)).padStart(2, '0')}:${String(oFra % 60).padStart(2, '0')}`;
+    modLinjer.push(`• ${visFra} ${m.name}${varighet > 0 ? ' · ' + timerAv(varighet) : ''}`);
+  }
+
+  const linjer = [];
+  const utenMin = Math.max(0, (tilM - fraM) - modMin);
+  if (modLinjer.length || utenMin > 15) {
+    linjer.push('Modeller:');
+    linjer.push(...modLinjer);
+    if (utenMin > 15) linjer.push(`• Uten modell · ${timerAv(utenMin)}`);
+  }
+  if (hit.points) {
+    if (linjer.length) linjer.push('');
+    linjer.push('Punkter (hele dagen):');
+    const koder = Object.entries(hit.codes || {});
+    if (koder.length) for (const [kode, n] of koder.sort((a, b) => b[1] - a[1])) linjer.push(`• ${kode} · ${n} stk`);
+    else linjer.push(`• ${hit.points} stk`);
+  }
+  return linjer.join('\n').trim();
+}
+
+// Oppdaterer auto-notatet når tidsvinduet endres (aldri brukerens egen tekst)
+function oppdaterVinduNotat() {
+  const form = document.getElementById('entryForm');
+  if (!form || !form.machine || !form.note) return;
+  const maskin = form.machine.value.trim();
+  if (!maskin) return;
+  const hit = infrakitEntryFor(form.dataset.date, maskin);
+  if (!hit) return;
+  settAutoFelt(form.note, vinduNotat(hit, form.timeStart.value, form.timeEnd.value));
+  autosizeNote();
+}
+
 // Setter start/slutt fra tidslinja og regner timer når begge er der
 function settTidsrom(form, fra, til) {
   if (fra) {
@@ -1159,6 +1216,7 @@ function settTidsrom(form, fra, til) {
     form.hours.value = t;
     form.hours.dataset.auto = t;
   }
+  oppdaterVinduNotat();
 }
 
 function bumpHours(delta) {
@@ -1173,7 +1231,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 18;
+const APP_VERSJON = 19;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 
@@ -1848,6 +1906,7 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', (e) => {
   if (e.target.id === 'clockProject') ui.clockProject = e.target.value;
   if (e.target.id === 'efMachine') maybePrefillMachineHours();
+  if (e.target.id === 'efStart' || e.target.id === 'efEnd') oppdaterVinduNotat();
   if (e.target.id === 'efProject') refreshMachineSelect();
   if (e.target.id === 'datePicker' && e.target.value) { ui.date = e.target.value; render(); }
   if (e.target.id === 'importFile') {

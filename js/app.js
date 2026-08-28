@@ -650,11 +650,18 @@ function openEntryModal(entry, date) {
   const isEdit = !!entry;
   const values = entry || { date, projectId: '', hours: '', note: '' };
   modal.innerHTML = `
-    <form id="entryForm"${isEdit ? ` data-edit-id="${entry.id}"` : ''} novalidate>
+    <form id="entryForm" data-date="${values.date}"${isEdit ? ` data-edit-id="${entry.id}"` : ''} novalidate>
       <h2>${isEdit ? 'Endre timeføring' : 'Ny timeføring'}</h2>
-      ${entry && entry.machine && entry.id.startsWith('ik-') ? `<p class="muted small" style="margin:0">Maskin: ${esc(entry.machine)} · hentet fra Infrakit</p>` : ''}
-      <label class="field-label" for="efDate">Dato</label>
-      <input class="input" type="date" id="efDate" name="date" value="${values.date}" required>
+      <p class="muted small" style="margin:0">${cap(d.dateLabel(values.date))}${entry && entry.machine && entry.id.startsWith('ik-') ? ` · ${esc(entry.machine)} · hentet fra Infrakit` : ''}</p>
+      <label class="field-label" for="efProject">Prosjekt</label>
+      ${projectSelect('id="efProject" name="projectId"', values.projectId || '')}
+      ${entry && entry.machine && entry.id.startsWith('ik-') ? '' : `
+      <label class="field-label" for="efMachine">Maskin <span class="muted">(valgfritt – timene føres på deg uansett)</span></label>
+      <select class="select" id="efMachine" name="machine">${machineOptions(
+        values.projectId && store.projectById(values.projectId) ? store.projectById(values.projectId).name : null,
+        (entry && entry.machine) || ''
+      )}</select>
+      <p class="muted small" id="machineHint" style="margin:6px 0 0" hidden></p>`}
       <div class="timerow">
         <div>
           <label class="field-label" for="efStart">Start <span class="muted">(valgfritt)</span></label>
@@ -665,15 +672,6 @@ function openEntryModal(entry, date) {
           <input class="input" type="time" id="efEnd" name="timeEnd" value="${entry && entry.end ? d.fmtTime(entry.end) : ''}">
         </div>
       </div>
-      <label class="field-label" for="efProject">Prosjekt</label>
-      ${projectSelect('id="efProject" name="projectId"', values.projectId || '')}
-      ${entry && entry.machine && entry.id.startsWith('ik-') ? '' : `
-      <label class="field-label" for="efMachine">Maskin <span class="muted">(valgfritt – timene føres på deg uansett)</span></label>
-      <select class="select" id="efMachine" name="machine">${machineOptions(
-        values.projectId && store.projectById(values.projectId) ? store.projectById(values.projectId).name : null,
-        (entry && entry.machine) || ''
-      )}</select>
-      <p class="muted small" id="machineHint" style="margin:6px 0 0" hidden></p>`}
       <label class="field-label" for="efHours">Timer</label>
       <div class="stepper">
         <button type="button" class="iconbtn" data-action="hours-minus" aria-label="Trekk fra en halv time">−</button>
@@ -790,7 +788,7 @@ function maybePrefillMachineHours() {
   const hint = document.getElementById('machineHint');
   const machine = form.machine.value.trim();
   const isNew = !form.dataset.editId;
-  const hit = machine ? infrakitEntryFor(form.date.value, machine) : null;
+  const hit = machine ? infrakitEntryFor(form.dataset.date, machine) : null;
 
   if (isNew) {
     // Uten treff tømmes det vi selv fylte inn, så tall fra forrige maskin ikke blir stående
@@ -837,10 +835,10 @@ function showFormError(msg) {
 }
 
 function saveEntryForm(form) {
-  const date = form.date.value;
+  const date = form.dataset.date;
   const hours = d.parseHours(form.hours.value);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    showFormError('Velg en gyldig dato.');
+    showFormError('Fant ikke dagen – lukk og prøv igjen.');
     return;
   }
   if (!Number.isFinite(hours) || hours <= 0 || hours > 24) {
@@ -1523,7 +1521,7 @@ document.addEventListener('input', (e) => {
 
 document.addEventListener('change', (e) => {
   if (e.target.id === 'clockProject') ui.clockProject = e.target.value;
-  if (e.target.id === 'efMachine' || e.target.id === 'efDate') maybePrefillMachineHours();
+  if (e.target.id === 'efMachine') maybePrefillMachineHours();
   if (e.target.id === 'efProject') refreshMachineSelect();
   if (e.target.id === 'datePicker' && e.target.value) { ui.date = e.target.value; render(); }
   if (e.target.id === 'importFile') {

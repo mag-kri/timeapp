@@ -1,6 +1,6 @@
-import * as store from './store.js?v=20';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=20';
-import * as d from './dates.js?v=20';
+import * as store from './store.js?v=21';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=21';
+import * as d from './dates.js?v=21';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
@@ -740,7 +740,7 @@ function vvTider(vv, forSlutt) {
       }
       for (const m of ik.models || []) {
         if (!m.from) continue;
-        const tekst = `${m.name}${m.hours ? ' · ' + d.fmtHours(m.hours) + ' t' : ''}`;
+        const tekst = `${m.name}${m.hours ? ' · ' + varighetFraTimer(m.hours) : ''}`;
         kart.set(m.from, kart.has(m.from) ? `${kart.get(m.from)} · ${tekst}` : tekst);
       }
     }
@@ -1001,7 +1001,7 @@ function maybePrefillMachineHours() {
       rader.push({ tid: s.to, tekst: 'maskinen stoppet' });
     }
     for (const m of (hit && hit.models) || []) {
-      if (m && m.from) rader.push({ tid: m.from, tekst: `${m.name}${m.hours ? ' · ' + d.fmtHours(m.hours) + ' t' : ''}` });
+      if (m && m.from) rader.push({ tid: m.from, tekst: `${m.name}${m.hours ? ' · ' + varighetFraTimer(m.hours) : ''}` });
     }
     rader.sort((a, b) => String(a.tid).localeCompare(String(b.tid)));
     if (rader.length) {
@@ -1141,6 +1141,17 @@ async function opprettEksternt(navn, systemer) {
 
 /* ---------- Hjelpere ---------- */
 
+// Varighet i klartekst: «4 t 18 min», «6 min», «2 t»
+function varighetTekst(minutter) {
+  const min = Math.round(minutter);
+  const t = Math.floor(min / 60);
+  const m = min % 60;
+  if (t <= 0) return `${Math.max(m, 1)} min`;
+  if (!m) return `${t} t`;
+  return `${t} t ${m} min`;
+}
+const varighetFraTimer = (timer) => varighetTekst((Number(timer) || 0) * 60);
+
 // Notat tilpasset tidsvinduet: kun modellene som overlapper start–slutt,
 // med tid klippet til vinduet. Punkter kan ikke deles på klokkeslett og
 // merkes derfor som dagstall. Hele dagen valgt -> originalnotatet.
@@ -1152,8 +1163,6 @@ function vinduNotat(hit, fra, til) {
   const fraM = min(fra);
   const tilM = min(til);
   if (tilM <= fraM) return hit.note || '';
-  const timerAv = (minutter) => d.fmtHours(Math.round((minutter / 60) * 100) / 100) + ' t';
-
   const modLinjer = [];
   let modMin = 0;
   for (const m of hit.models) {
@@ -1166,7 +1175,7 @@ function vinduNotat(hit, fra, til) {
     const varighet = oTil - oFra;
     modMin += varighet;
     const visFra = `${String(Math.floor(oFra / 60)).padStart(2, '0')}:${String(oFra % 60).padStart(2, '0')}`;
-    modLinjer.push(`• ${visFra} ${m.name}${varighet > 0 ? ' · ' + timerAv(varighet) : ''}`);
+    modLinjer.push(`• ${visFra} ${m.name}${varighet > 0 ? ' · ' + varighetTekst(varighet) : ''}`);
   }
 
   const linjer = [];
@@ -1174,7 +1183,7 @@ function vinduNotat(hit, fra, til) {
   if (modLinjer.length || utenMin > 15) {
     linjer.push('Modeller:');
     linjer.push(...modLinjer);
-    if (utenMin > 15) linjer.push(`• Uten modell · ${timerAv(utenMin)}`);
+    if (utenMin > 15) linjer.push(`• Uten modell · ${varighetTekst(utenMin)}`);
   }
   if (hit.points) {
     if (linjer.length) linjer.push('');
@@ -1231,7 +1240,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 20;
+const APP_VERSJON = 21;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 

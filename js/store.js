@@ -1,5 +1,5 @@
 // Datalager: hele tilstanden ligger i localStorage på enheten.
-import { isoDate, addDays } from './dates.js?v=20';
+import { isoDate, addDays } from './dates.js?v=21';
 
 const KEY = 'timeapp:data:v1';
 

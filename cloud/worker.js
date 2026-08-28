@@ -37,7 +37,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 17;
+const VERSJON = 21;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -272,7 +272,15 @@ const osloFmt = new Intl.DateTimeFormat('sv-SE', {
   timeZone: 'Europe/Oslo', year: 'numeric', month: '2-digit', day: '2-digit',
 });
 const osloDate = (ms) => osloFmt.format(new Date(ms));
-const timerTekst = (ms) => String(Math.round((ms / 3600000) * 10) / 10).replace('.', ',') + ' t';
+// Varighet i klartekst: "4 t 18 min", "6 min", "2 t"
+const timerTekst = (ms) => {
+  const min = Math.round(ms / 60000);
+  const t = Math.floor(min / 60);
+  const m = min % 60;
+  if (t <= 0) return Math.max(m, 1) + ' min';
+  if (!m) return t + ' t';
+  return t + ' t ' + m + ' min';
+};
 const minutter = (hhmm) => {
   const [t, m] = String(hhmm).split(':').map(Number);
   return (t || 0) * 60 + (m || 0);

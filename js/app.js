@@ -1,6 +1,6 @@
-import * as store from './store.js';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js';
-import * as d from './dates.js';
+import * as store from './store.js?v=12';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=12';
+import * as d from './dates.js?v=12';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');

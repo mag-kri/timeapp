@@ -1,6 +1,6 @@
-import * as store from './store.js?v=19';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=19';
-import * as d from './dates.js?v=19';
+import * as store from './store.js?v=20';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=20';
+import * as d from './dates.js?v=20';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
@@ -1231,7 +1231,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 19;
+const APP_VERSJON = 20;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 
@@ -1906,7 +1906,12 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', (e) => {
   if (e.target.id === 'clockProject') ui.clockProject = e.target.value;
   if (e.target.id === 'efMachine') maybePrefillMachineHours();
-  if (e.target.id === 'efStart' || e.target.id === 'efEnd') oppdaterVinduNotat();
+  if (e.target.id === 'efStart' || e.target.id === 'efEnd') {
+    // Manuell tidsendring skal regne timer og bygge notatet på nytt,
+    // akkurat som trykk på tidslinja
+    const f = document.getElementById('entryForm');
+    if (f) settTidsrom(f, f.timeStart.value, f.timeEnd.value);
+  }
   if (e.target.id === 'efProject') refreshMachineSelect();
   if (e.target.id === 'datePicker' && e.target.value) { ui.date = e.target.value; render(); }
   if (e.target.id === 'importFile') {

@@ -359,6 +359,14 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
 .sysrad.av { opacity: .6; cursor: default; }
 .sysrad input { accent-color: var(--accent); flex: none; }
 
+/* Maskinens arbeidsøkter som trykkbare tidsforslag */
+.okter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
 /* Rader i «Andre systemer»-kortet */
 .integrad {
   display: flex;

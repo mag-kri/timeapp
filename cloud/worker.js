@@ -37,7 +37,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 13;
+const VERSJON = 14;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -273,6 +273,26 @@ const osloFmt = new Intl.DateTimeFormat('sv-SE', {
 });
 const osloDate = (ms) => osloFmt.format(new Date(ms));
 const timerTekst = (ms) => String(Math.round((ms / 3600000) * 10) / 10).replace('.', ',') + ' t';
+const minutter = (hhmm) => {
+  const [t, m] = String(hhmm).split(':').map(Number);
+  return (t || 0) * 60 + (m || 0);
+};
+
+// Slaar sammen arbeidsoekter med under 15 min mellomrom, slik at lista viser
+// nettopp de pausene der noen kan ha byttet maskin
+function slaaSammenOkter(okter) {
+  const sortert = [...okter].sort((a, b) => a.from.localeCompare(b.from));
+  const blokker = [];
+  for (const o of sortert) {
+    const siste = blokker[blokker.length - 1];
+    if (siste && minutter(o.from) - minutter(siste.to) <= 15) {
+      if (o.to > siste.to) siste.to = o.to;
+    } else {
+      blokker.push({ from: o.from, to: o.to });
+    }
+  }
+  return blokker.slice(0, 12);
+}
 
 // Tidsstempler fra logpoints-API-et kommer i praksis som tall-liste
 // [aar, mnd, dag, time, min, sek] i UTC - ikke ISO-streng som
@@ -394,7 +414,7 @@ async function buildHours(token, kunProsjektId) {
     try {
       const per = new Map();
       const bucket = (dag) => {
-        if (!per.has(dag)) per.set(dag, { ms: 0, first: null, last: null, turer: 0, km: 0, pelMin: null, pelMaks: null, mod: new Map(), modTips: new Map(), mat: new Map(), ruter: new Map(), koder: null });
+        if (!per.has(dag)) per.set(dag, { ms: 0, first: null, last: null, okter: [], turer: 0, km: 0, pelMin: null, pelMaks: null, mod: new Map(), modTips: new Map(), mat: new Map(), ruter: new Map(), koder: null });
         return per.get(dag);
       };
 
@@ -410,6 +430,7 @@ async function buildHours(token, kunProsjektId) {
         const til = String(e.end).slice(11, 16);
         if (!d.first || fra < d.first) d.first = fra;
         if (!d.last || til > d.last) d.last = til;
+        if (d.okter.length < 60) d.okter.push({ from: fra, to: til });
         // Tooltip-en baerer pelnummer og modellnavn for maskinstyrte maskiner
         const tt = String(e.tooltip || '');
         for (const treff of tt.matchAll(/pel\.nr\.\s*:\s*(\d+)/gi)) {
@@ -599,6 +620,7 @@ async function buildHours(token, kunProsjektId) {
           end: d.last ? `${dag}T${d.last}:00` : null,
           // Strukturert for oversikter - notatet over er kun for mennesker
           points: antallPunkter,
+          sessions: d.okter.length ? slaaSammenOkter(d.okter) : null,
           codes: d.koder && d.koder.size ? Object.fromEntries(d.koder) : null,
           models: d.mod.size
             ? [...d.mod].map(([n, m]) => ({ name: n, from: m.fra, hours: Math.round((m.ms / 3600000) * 100) / 100 }))

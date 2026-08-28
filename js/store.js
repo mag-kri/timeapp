@@ -1,5 +1,5 @@
 // Datalager: hele tilstanden ligger i localStorage på enheten.
-import { isoDate, addDays } from './dates.js?v=13';
+import { isoDate, addDays } from './dates.js?v=14';
 
 const KEY = 'timeapp:data:v1';
 
@@ -55,6 +55,7 @@ function sanitize(raw) {
       if (Number(e.points) > 0) entry.points = Number(e.points);
       if (e.codes && typeof e.codes === 'object' && !Array.isArray(e.codes)) entry.codes = e.codes;
       if (Array.isArray(e.models)) entry.models = e.models.filter((m) => m && typeof m.name === 'string').slice(0, 40);
+      if (Array.isArray(e.sessions)) entry.sessions = e.sessions.filter((s) => s && s.from && s.to).slice(0, 12);
       if (Number(e.noModelHours) > 0) entry.noModelHours = Number(e.noModelHours);
       out.entries.push(entry);
     }
@@ -274,18 +275,20 @@ export function syncMachineHours(days, opts = {}) {
       points: Number(item.points) > 0 ? Number(item.points) : 0,
       codes: item.codes && typeof item.codes === 'object' ? item.codes : null,
       models: Array.isArray(item.models) ? item.models : null,
+      sessions: Array.isArray(item.sessions) ? item.sessions : null,
       noModelHours: Number(item.noModelHours) > 0 ? Number(item.noModelHours) : 0,
     };
     const settEkstra = (e) => {
       if (ekstra.points) e.points = ekstra.points; else delete e.points;
       if (ekstra.codes) e.codes = ekstra.codes; else delete e.codes;
       if (ekstra.models) e.models = ekstra.models; else delete e.models;
+      if (ekstra.sessions) e.sessions = ekstra.sessions; else delete e.sessions;
       if (ekstra.noModelHours) e.noModelHours = ekstra.noModelHours; else delete e.noModelHours;
     };
     const existing = state.entries.find((e) => e.id === id);
     if (existing) {
-      const ekstraEndret = JSON.stringify([existing.points || 0, existing.codes || null, existing.models || null, existing.noModelHours || 0])
-        !== JSON.stringify([ekstra.points, ekstra.codes, ekstra.models, ekstra.noModelHours]);
+      const ekstraEndret = JSON.stringify([existing.points || 0, existing.codes || null, existing.models || null, existing.sessions || null, existing.noModelHours || 0])
+        !== JSON.stringify([ekstra.points, ekstra.codes, ekstra.models, ekstra.sessions, ekstra.noModelHours]);
       if (
         existing.hours !== hours || existing.projectId !== projectId || existing.note !== note ||
         (existing.start || null) !== start || (existing.end || null) !== end || ekstraEndret

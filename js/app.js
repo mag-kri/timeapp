@@ -1,6 +1,6 @@
-import * as store from './store.js?v=13';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=13';
-import * as d from './dates.js?v=13';
+import * as store from './store.js?v=14';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=14';
+import * as d from './dates.js?v=14';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
@@ -662,7 +662,8 @@ function openEntryModal(entry, date) {
         (entry && entry.machine) || '',
         values.date
       )}</select>
-      <p class="muted small" id="machineHint" style="margin:6px 0 0" hidden></p>`}
+      <p class="muted small" id="machineHint" style="margin:6px 0 0" hidden></p>
+      <div id="maskinOkter" hidden></div>`}
       <div class="timerow">
         <div>
           <label class="field-label" for="efStart">Start <span class="muted">(valgfritt)</span></label>
@@ -834,6 +835,20 @@ function maybePrefillMachineHours() {
     if (hit && hit.projectId && form.projectId) form.projectId.value = hit.projectId;
   }
 
+  // Maskinens arbeidsøkter som trykkbare tidsforslag – pausene mellom dem
+  // er gjerne der en annen tok over maskinen
+  const tl = document.getElementById('maskinOkter');
+  if (tl) {
+    if (hit && Array.isArray(hit.sessions) && hit.sessions.length) {
+      tl.innerHTML = `<span class="field-label">Maskinens økter <span class="muted">– trykk for å bruke tida</span></span>
+        <div class="okter">${hit.sessions.map((s) => `<button type="button" class="btn ghost small" data-action="bruk-okt" data-fra="${esc(s.from)}" data-til="${esc(s.to)}">${esc(s.from)}–${esc(s.to)}</button>`).join('')}</div>`;
+      tl.hidden = false;
+    } else {
+      tl.innerHTML = '';
+      tl.hidden = true;
+    }
+  }
+
   if (!machine) {
     if (hint) hint.hidden = true;
     return;
@@ -963,7 +978,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 13;
+const APP_VERSJON = 14;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 
@@ -1452,6 +1467,22 @@ const actions = {
     if (confirm(`Slette «${p.name}»?${extra}`)) {
       store.deleteProject(p.id);
       modal.close();
+    }
+  },
+  'bruk-okt'(el) {
+    const form = document.getElementById('entryForm');
+    if (!form || !form.timeStart) return;
+    const fra = el.dataset.fra;
+    const til = el.dataset.til;
+    form.timeStart.value = fra;
+    form.timeStart.dataset.auto = fra;
+    form.timeEnd.value = til;
+    form.timeEnd.dataset.auto = til;
+    const ms = new Date(`2000-01-01T${til}:00`) - new Date(`2000-01-01T${fra}:00`);
+    if (ms > 0) {
+      const t = d.fmtHours(Math.round((ms / 3600000) * 100) / 100);
+      form.hours.value = t;
+      form.hours.dataset.auto = t;
     }
   },
   'hours-minus'() { bumpHours(-0.5); },

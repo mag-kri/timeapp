@@ -225,6 +225,10 @@ export async function kjorTimeTest() {
         && g.models.some((m) => m.name === 'Traubunn P200' && m.from === '08:00' && m.hours === 6)
         && g.noModelHours === 1;
     })(),
+    okterRett: (() => {
+      const g = dager.find((d) => d.machine === 'Gravemaskin A') || {};
+      return JSON.stringify(g.sessions) === JSON.stringify([{ from: '08:00', to: '16:00' }]);
+    })(),
     modellerRett: (() => {
       const n = dager.find((d) => d.machine === 'Gravemaskin A')?.note || '';
       return n.includes('pel 1200-1450') && n.includes('08:00 Traubunn P200 · 6 t')

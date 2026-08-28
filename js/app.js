@@ -1,6 +1,6 @@
-import * as store from './store.js?v=17';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=17';
-import * as d from './dates.js?v=17';
+import * as store from './store.js?v=18';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=18';
+import * as d from './dates.js?v=18';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
@@ -724,23 +724,38 @@ function vvUndertekst(vv) {
   return deler.join(' · ');
 }
 
-// Tidsforslag: maskinens dag når maskin er valgt, ellers vanlige tider
+// Tidsforslag med kontekst: hendelsene fra maskinens dag når maskin er
+// valgt (hva som skjedde på hvert klokkeslett), ellers vanlige tider
 function vvTider(vv, forSlutt) {
-  const tider = new Set();
+  const standard = () => (forSlutt
+    ? ['14:00', '14:30', '15:00', '15:30', '16:00', '17:00', '19:00']
+    : ['06:00', '06:30', '07:00', '07:30', '08:00']);
+  const kart = new Map();
   if (vv.machine) {
     const ik = infrakitEntryFor(vv.date, vv.machine);
     if (ik) {
-      for (const s of ik.sessions || []) { tider.add(s.from); tider.add(s.to); }
-      for (const m of ik.models || []) if (m.from) tider.add(m.from);
+      for (const s of ik.sessions || []) {
+        if (s.from) kart.set(s.from, 'maskinen startet');
+        if (s.to) kart.set(s.to, 'maskinen stoppet');
+      }
+      for (const m of ik.models || []) {
+        if (!m.from) continue;
+        const tekst = `${m.name}${m.hours ? ' · ' + d.fmtHours(m.hours) + ' t' : ''}`;
+        kart.set(m.from, kart.has(m.from) ? `${kart.get(m.from)} · ${tekst}` : tekst);
+      }
     }
   }
-  if (!tider.size) {
-    for (const t of forSlutt
-      ? ['14:00', '14:30', '15:00', '15:30', '16:00', '17:00', '19:00']
-      : ['06:00', '06:30', '07:00', '07:30', '08:00']) tider.add(t);
+  const fraMaskin = kart.size > 0;
+  if (!fraMaskin) for (const t of standard()) kart.set(t, '');
+  let liste = [...kart.entries()].map(([tid, tekst]) => ({ tid, tekst }))
+    .sort((a, b) => a.tid.localeCompare(b.tid));
+  if (forSlutt && vv.start) {
+    liste = liste.filter((x) => x.tid > vv.start);
+    // Om maskindagen ikke har noe etter starten, tilby vanlige tider i stedet
+    if (!liste.length) {
+      liste = standard().filter((t) => t > vv.start).map((tid) => ({ tid, tekst: '' }));
+    }
   }
-  let liste = [...tider].sort();
-  if (forSlutt && vv.start) liste = liste.filter((t) => t > vv.start);
   return liste;
 }
 
@@ -777,9 +792,12 @@ function renderVeiviser() {
   } else {
     const forSlutt = vv.steg === 4;
     const tider = vvTider(vv, forSlutt);
+    const medTekst = tider.some((x) => x.tekst);
     inner = `<span class="field-label">${forSlutt ? 'Når ga du deg?' : 'Når begynte du?'}</span>
-      ${vv.machine ? '<p class="muted small" style="margin:0">Forslagene er hentet fra maskinens dag i Infrakit.</p>' : ''}
-      <div class="okter">${tider.map((t) => `<button type="button" class="btn ghost small" data-action="vv-tid" data-tid="${t}">${t}</button>`).join('')}</div>
+      ${medTekst
+    ? `<p class="muted small" style="margin:0">Hendelsene er hentet fra maskinens dag i Infrakit.</p>
+      <div class="tidslinje">${tider.map((x) => `<button type="button" data-action="vv-tid" data-tid="${x.tid}"><strong>${x.tid}</strong>${esc(x.tekst)}</button>`).join('')}</div>`
+    : `<div class="okter">${tider.map((x) => `<button type="button" class="btn ghost small" data-action="vv-tid" data-tid="${x.tid}">${x.tid}</button>`).join('')}</div>`}
       <label class="field-label" for="vvTid">Eller velg klokkeslett selv</label>
       <div class="btnrow" style="margin:0">
         <input class="input" type="time" id="vvTid" style="flex:1">
@@ -1155,7 +1173,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 17;
+const APP_VERSJON = 18;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 

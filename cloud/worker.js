@@ -37,7 +37,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 14;
+const VERSJON = 17;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -905,15 +905,16 @@ export default {
           }
           // Upsert - men bare eieren kan endre en eksisterende rad
           await spor(env,
-            `INSERT INTO entries (id, email, company_id, date, project, machine, hours, note, start_at, end_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `INSERT INTO entries (id, email, company_id, date, project, machine, task, hours, note, start_at, end_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET date = excluded.date, project = excluded.project,
-             machine = excluded.machine, hours = excluded.hours, note = excluded.note,
+             machine = excluded.machine, task = excluded.task, hours = excluded.hours, note = excluded.note,
              start_at = excluded.start_at, end_at = excluded.end_at, updated_at = excluded.updated_at
              WHERE entries.email = excluded.email`,
             id, oekt.bruker.email, oekt.bruker.company_id, dato,
             e.project ? String(e.project).slice(0, 120) : null,
             maskin,
+            e.task ? String(e.task).slice(0, 40) : null,
             Math.max(0, Math.min(24, timer)),
             String(e.note || '').slice(0, 900),
             e.start ? String(e.start).slice(0, 19) : null,
@@ -950,15 +951,15 @@ export default {
         }
         const rader = alle
           ? await spor(env,
-            `SELECT e.id, e.email, u.name, e.date, e.project, e.machine, e.hours, e.note, e.start_at, e.end_at
+            `SELECT e.id, e.email, u.name, e.date, e.project, e.machine, e.task, e.hours, e.note, e.start_at, e.end_at
              FROM entries e JOIN users u ON u.email = e.email
              WHERE e.company_id = ? ORDER BY e.date DESC LIMIT 1000`, oekt.bruker.company_id).all()
           : await spor(env,
-            `SELECT id, date, project, machine, hours, note, start_at, end_at
+            `SELECT id, date, project, machine, task, hours, note, start_at, end_at
              FROM entries WHERE email = ? ORDER BY date DESC LIMIT 1000`, oekt.bruker.email).all();
         const entries = (rader.results || []).map((r) => ({
           id: r.id, email: r.email, name: r.name, date: r.date, project: r.project,
-          machine: r.machine, hours: r.hours, note: r.note, start: r.start_at, end: r.end_at,
+          machine: r.machine, task: r.task, hours: r.hours, note: r.note, start: r.start_at, end: r.end_at,
         }));
         return json({ entries });
       }

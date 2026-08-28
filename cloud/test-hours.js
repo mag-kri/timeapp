@@ -30,7 +30,7 @@ export async function kjorTimeTest() {
           return null;
         },
         async all() {
-          if (q.startsWith('SELECT id, date, project, machine, hours, note, start_at, end_at FROM entries')) {
+          if (q.startsWith('SELECT id, date, project, machine, task, hours, note, start_at, end_at FROM entries')) {
             return { results: [...db.entries.values()].filter((e) => e.email === a[0]) };
           }
           if (q.startsWith('SELECT e.id, e.email, u.name')) {
@@ -50,7 +50,7 @@ export async function kjorTimeTest() {
           else if (q.startsWith('INSERT INTO entries')) {
             const fantes = db.entries.get(a[0]);
             if (!fantes || fantes.email === a[1]) {
-              db.entries.set(a[0], { id: a[0], email: a[1], company_id: a[2], date: a[3], project: a[4], machine: a[5], hours: a[6], note: a[7], start_at: a[8], end_at: a[9] });
+              db.entries.set(a[0], { id: a[0], email: a[1], company_id: a[2], date: a[3], project: a[4], machine: a[5], task: a[6], hours: a[7], note: a[8], start_at: a[9], end_at: a[10] });
             }
           }
           else if (q.startsWith('DELETE FROM entries')) {
@@ -181,7 +181,7 @@ export async function kjorTimeTest() {
 
   // Timefoeringer i skyen: lagre, oppdatere, hente, slette - og eierskapsvern
   await kallApi('/api/timer', { method: 'POST', token, body: { entries: [
-    { id: 'e1', date: idag, project: 'Prosjekt A', machine: 'Gravemaskin A', hours: 8.2, note: 'dagsrapport', start: idag + 'T07:00:00', end: idag + 'T15:30:00' },
+    { id: 'e1', date: idag, project: 'Prosjekt A', machine: 'Gravemaskin A', task: 'Maskinfoerer', hours: 8.2, note: 'dagsrapport', start: idag + 'T07:00:00', end: idag + 'T15:30:00' },
     { id: 'e2', date: idag, project: 'Prosjekt A', hours: 2, note: '' },
   ] } });
   await kallApi('/api/timer', { method: 'POST', token, body: { entries: [{ id: 'e2', date: idag, project: 'Prosjekt A', hours: 3.5, note: 'endret' }] } });
@@ -247,7 +247,7 @@ export async function kjorTimeTest() {
     aktivtProsjektTilSlutt: aktivtProsjekt,
     satteTilbake: aktivtProsjekt === 1,
     skyTimer: {
-      mine: (mineTimer.data?.entries || []).map((e) => e.id + ' ' + e.hours + 't ' + (e.machine || '-') + ' ' + (e.note || '-')),
+      mine: (mineTimer.data?.entries || []).map((e) => e.id + ' ' + e.hours + 't ' + (e.machine || '-') + ' ' + (e.task || '-') + ' ' + (e.note || '-')),
       alleHarNavn: (alleTimer.data?.entries || []).every((e) => e.name),
       fremmedUrort: db.entries.get('fremmed')?.hours === 1,
       etterSlett: (etterSlett.data?.entries || []).map((e) => e.id),

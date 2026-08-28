@@ -1,6 +1,6 @@
-import * as store from './store.js?v=16';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=16';
-import * as d from './dates.js?v=16';
+import * as store from './store.js?v=17';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=17';
+import * as d from './dates.js?v=17';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
@@ -168,10 +168,14 @@ function entryList(entries) {
     if (e.machine) {
       const parts = [];
       if (e.start && e.end) parts.push(`${d.fmtTime(e.start)}–${d.fmtTime(e.end)}`);
+      if (e.task) parts.push(esc(e.task));
       if (p) parts.push(esc(p.name));
       meta = parts.length ? parts.join(' · ') : (e.id.startsWith('ik-') ? 'Fra Infrakit' : 'Ført manuelt');
     } else {
-      meta = e.start && e.end ? `${d.fmtTime(e.start)}–${d.fmtTime(e.end)}` : 'Ført manuelt';
+      const parts = [];
+      if (e.start && e.end) parts.push(`${d.fmtTime(e.start)}–${d.fmtTime(e.end)}`);
+      if (e.task) parts.push(esc(e.task));
+      meta = parts.length ? parts.join(' · ') : 'Ført manuelt';
     }
     return `<li>
       <button class="entry" data-action="edit-entry" data-id="${e.id}" aria-label="Endre timeføring">
@@ -646,20 +650,24 @@ function renderMore() {
 
 /* ---------- Modaler ---------- */
 
-function openEntryModal(entry, date) {
+function openEntryModal(entry, date, forslag) {
   const isEdit = !!entry;
-  const values = entry || { date, projectId: '', hours: '', note: '' };
+  const f = forslag || {};
+  const values = entry || { date, projectId: f.projectId || '', hours: f.hours || '', note: '' };
+  const oppgave = (entry && entry.task) || f.task || '';
+  const valgtMaskin = (entry && entry.machine) || f.machine || '';
   modal.innerHTML = `
     <form id="entryForm" data-date="${values.date}"${isEdit ? ` data-edit-id="${entry.id}"` : ''} novalidate>
       <h2>${isEdit ? 'Endre timeføring' : 'Ny timeføring'}</h2>
-      <p class="muted small" style="margin:0">${cap(d.dateLabel(values.date))}${entry && entry.machine && entry.id.startsWith('ik-') ? ` · ${esc(entry.machine)} · hentet fra Infrakit` : ''}</p>
+      <p class="muted small" style="margin:0">${cap(d.dateLabel(values.date))}${oppgave ? ` · ${esc(oppgave)}` : ''}${entry && entry.machine && entry.id.startsWith('ik-') ? ` · ${esc(entry.machine)} · hentet fra Infrakit` : ''}</p>
+      <input type="hidden" name="task" value="${esc(oppgave)}">
       <label class="field-label" for="efProject">Prosjekt</label>
       ${projectSelect('id="efProject" name="projectId"', values.projectId || '')}
       ${entry && entry.machine && entry.id.startsWith('ik-') ? '' : `
       <label class="field-label" for="efMachine">Maskin <span class="muted">(valgfritt – timene føres på deg uansett)</span></label>
       <select class="select" id="efMachine" name="machine">${machineOptions(
         values.projectId && store.projectById(values.projectId) ? store.projectById(values.projectId).name : null,
-        (entry && entry.machine) || '',
+        valgtMaskin,
         values.date
       )}</select>
       <p class="muted small" id="machineHint" style="margin:6px 0 0" hidden></p>
@@ -667,11 +675,11 @@ function openEntryModal(entry, date) {
       <div class="timerow">
         <div>
           <label class="field-label" for="efStart">Start <span class="muted">(valgfritt)</span></label>
-          <input class="input" type="time" id="efStart" name="timeStart" value="${entry && entry.start ? d.fmtTime(entry.start) : ''}">
+          <input class="input" type="time" id="efStart" name="timeStart" value="${entry && entry.start ? d.fmtTime(entry.start) : f.start || ''}">
         </div>
         <div>
           <label class="field-label" for="efEnd">Slutt</label>
-          <input class="input" type="time" id="efEnd" name="timeEnd" value="${entry && entry.end ? d.fmtTime(entry.end) : ''}">
+          <input class="input" type="time" id="efEnd" name="timeEnd" value="${entry && entry.end ? d.fmtTime(entry.end) : f.end || ''}">
         </div>
       </div>
       <label class="field-label" for="efHours">Timer</label>
@@ -693,6 +701,128 @@ function openEntryModal(entry, date) {
   modal.showModal();
   autosizeNote();
   fetchMaskinbruk();
+  // Kommer vi fra veiviseren med maskin valgt, hentes notat og tidslinje straks
+  if (!isEdit && valgtMaskin) {
+    refreshMachineSelect();
+  }
+}
+
+/* --- Veiviser for ny timeføring: prosjekt -> oppgave -> maskin -> start -> slutt --- */
+
+function startVeiviser(date) {
+  ui.vv = { date, steg: 1, projectId: null, oppgave: null, machine: null, start: null };
+  fetchMaskinbruk();
+  renderVeiviser();
+}
+
+function vvUndertekst(vv) {
+  const deler = [cap(d.dateLabel(vv.date))];
+  if (vv.steg > 1) deler.push(vv.projectId ? (store.projectById(vv.projectId)?.name || '?') : 'Uten prosjekt');
+  if (vv.oppgave && (vv.steg > 2 || vv.machine)) deler.push(vv.oppgave);
+  if (vv.machine) deler.push(vv.machine);
+  if (vv.steg > 3 && vv.start) deler.push('fra ' + vv.start);
+  return deler.join(' · ');
+}
+
+// Tidsforslag: maskinens dag når maskin er valgt, ellers vanlige tider
+function vvTider(vv, forSlutt) {
+  const tider = new Set();
+  if (vv.machine) {
+    const ik = infrakitEntryFor(vv.date, vv.machine);
+    if (ik) {
+      for (const s of ik.sessions || []) { tider.add(s.from); tider.add(s.to); }
+      for (const m of ik.models || []) if (m.from) tider.add(m.from);
+    }
+  }
+  if (!tider.size) {
+    for (const t of forSlutt
+      ? ['14:00', '14:30', '15:00', '15:30', '16:00', '17:00', '19:00']
+      : ['06:00', '06:30', '07:00', '07:30', '08:00']) tider.add(t);
+  }
+  let liste = [...tider].sort();
+  if (forSlutt && vv.start) liste = liste.filter((t) => t > vv.start);
+  return liste;
+}
+
+function renderVeiviser() {
+  const vv = ui.vv;
+  if (!vv) return;
+  let inner = '';
+
+  if (vv.steg === 1) {
+    inner = `<span class="field-label">Hvilket prosjekt jobbet du på?</span>
+      <div class="vvalg">
+        ${state.projects.map((p) => `<button type="button" class="btn" data-action="vv-prosjekt" data-id="${p.id}"><span class="dot" style="background:${projectColor(p)}"></span>${esc(p.name)}</button>`).join('')}
+        <button type="button" class="btn ghost" data-action="vv-prosjekt" data-id="">Uten prosjekt</button>
+      </div>`;
+  } else if (vv.steg === 2 && vv.oppgave !== 'Maskinfører') {
+    inner = `<span class="field-label">Hva var oppgaven din?</span>
+      <div class="vvalg">
+        <button type="button" class="btn" data-action="vv-oppgave" data-oppgave="Maskinfører">Maskinfører</button>
+        <button type="button" class="btn" data-action="vv-oppgave" data-oppgave="Hjelpemann">Hjelpemann</button>
+        <button type="button" class="btn" data-action="vv-oppgave" data-oppgave="Annet">Annet arbeid</button>
+      </div>`;
+  } else if (vv.steg === 2) {
+    const pnavn = vv.projectId ? (store.projectById(vv.projectId)?.name || null) : null;
+    const maskiner = store.machinesForProject(pnavn);
+    inner = `<span class="field-label">Hvilken maskin kjørte du?</span>
+      <div class="vvalg">
+        ${maskiner.map((m) => {
+          const hvem = maskinOpptattAv(m, vv.date);
+          if (hvem) return `<button type="button" class="btn" disabled>${esc(m)} – opptatt (${esc(hvem)})</button>`;
+          const minEgen = state.entries.some((e) => !e.id.startsWith('ik-') && e.machine === m && e.date === vv.date);
+          return `<button type="button" class="btn" data-action="vv-maskin" data-navn="${esc(m)}">${esc(m)}${minEgen ? ' – ført av deg' : ''}</button>`;
+        }).join('') || '<p class="empty">Fant ingen maskiner på prosjektet. Prøv «Oppdater maskiner og timer» under Mer.</p>'}
+      </div>`;
+  } else {
+    const forSlutt = vv.steg === 4;
+    const tider = vvTider(vv, forSlutt);
+    inner = `<span class="field-label">${forSlutt ? 'Når ga du deg?' : 'Når begynte du?'}</span>
+      ${vv.machine ? '<p class="muted small" style="margin:0">Forslagene er hentet fra maskinens dag i Infrakit.</p>' : ''}
+      <div class="okter">${tider.map((t) => `<button type="button" class="btn ghost small" data-action="vv-tid" data-tid="${t}">${t}</button>`).join('')}</div>
+      <label class="field-label" for="vvTid">Eller velg klokkeslett selv</label>
+      <div class="btnrow" style="margin:0">
+        <input class="input" type="time" id="vvTid" style="flex:1">
+        <button type="button" class="btn" data-action="vv-tid-manuell">Bruk</button>
+      </div>`;
+  }
+
+  modal.innerHTML = `
+    <h2>Ny timeføring</h2>
+    <p class="muted small" style="margin:0">${esc(vvUndertekst(vv))}</p>
+    ${inner}
+    <div class="btnrow">
+      ${vv.steg > 1 || vv.oppgave ? '<button type="button" class="btn ghost" data-action="vv-tilbake">‹ Tilbake</button>' : ''}
+      <span class="spacer"></span>
+      <button type="button" class="btn ghost" data-action="close-modal">Avbryt</button>
+    </div>`;
+  if (!modal.open) modal.showModal();
+}
+
+function vvSettTid(tid) {
+  const vv = ui.vv;
+  if (!vv || !/^\d{2}:\d{2}$/.test(tid || '')) return;
+  if (vv.steg === 3) {
+    vv.start = tid;
+    vv.steg = 4;
+    renderVeiviser();
+    return;
+  }
+  if (tid <= vv.start) return;
+  // Ferdig: åpne det vanlige skjemaet med alt utfylt for en siste sjekk
+  const ms = new Date(`2000-01-01T${tid}:00`) - new Date(`2000-01-01T${vv.start}:00`);
+  const timer = Math.round((ms / 3600000) * 100) / 100;
+  const forslag = {
+    projectId: vv.projectId || '',
+    task: vv.oppgave || '',
+    machine: vv.machine || '',
+    start: vv.start,
+    end: tid,
+    hours: timer,
+  };
+  const dato = vv.date;
+  ui.vv = null;
+  openEntryModal(null, dato, forslag);
 }
 
 // Systemene et nytt prosjekt kan opprettes i samtidig. Kun koordinatorer,
@@ -926,6 +1056,7 @@ function saveEntryForm(form) {
     hours: Math.round(hours * 100) / 100,
     note: form.note.value.trim(),
   };
+  if (form.task && form.task.value.trim()) data.task = form.task.value.trim().slice(0, 40);
   if (form.machine) data.machine = form.machine.value.trim();
   if (data.machine) {
     const hvem = maskinOpptattAv(data.machine, date);
@@ -1024,7 +1155,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 16;
+const APP_VERSJON = 17;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 
@@ -1244,7 +1375,7 @@ function skyLagre(entry) {
   const u = lesUtboks().filter((x) => !(x.op === 'lagre' && x.entry.id === entry.id));
   u.push({ op: 'lagre', entry: {
     id: entry.id, date: entry.date, project: p ? p.name : null,
-    machine: entry.machine || null, hours: entry.hours, note: entry.note || '',
+    machine: entry.machine || null, task: entry.task || null, hours: entry.hours, note: entry.note || '',
     start: entry.start || null, end: entry.end || null,
   } });
   skrivUtboks(u);
@@ -1488,7 +1619,54 @@ const actions = {
   'week-next'() { ui.weekStart = d.addDays(ui.weekStart, 7); render(); },
   'week-current'() { ui.weekStart = d.mondayOf(d.todayISO()); render(); },
   'open-day'(el) { ui.date = el.dataset.date; ui.tab = 'day'; render(); },
-  'new-entry'() { openEntryModal(null, ui.date); },
+  'new-entry'() { startVeiviser(ui.date); },
+  'vv-prosjekt'(el) {
+    ui.vv.projectId = el.dataset.id || null;
+    ui.vv.steg = 2;
+    renderVeiviser();
+  },
+  'vv-oppgave'(el) {
+    ui.vv.oppgave = el.dataset.oppgave;
+    if (el.dataset.oppgave === 'Maskinfører') {
+      renderVeiviser();
+    } else {
+      ui.vv.machine = null;
+      ui.vv.steg = 3;
+      renderVeiviser();
+    }
+  },
+  'vv-maskin'(el) {
+    ui.vv.machine = el.dataset.navn;
+    ui.vv.steg = 3;
+    renderVeiviser();
+  },
+  'vv-tid'(el) { vvSettTid(el.dataset.tid); },
+  'vv-tid-manuell'() {
+    const felt = document.getElementById('vvTid');
+    if (felt && felt.value) vvSettTid(felt.value);
+  },
+  'vv-tilbake'() {
+    const vv = ui.vv;
+    if (!vv) return;
+    if (vv.steg === 4) {
+      vv.slutt = null;
+      vv.steg = 3;
+    } else if (vv.steg === 3) {
+      vv.start = null;
+      if (vv.oppgave === 'Maskinfører') vv.machine = null;
+      else vv.oppgave = null;
+      vv.steg = 2;
+    } else if (vv.steg === 2) {
+      if (vv.oppgave === 'Maskinfører' && !vv.machine) {
+        vv.oppgave = null;
+      } else {
+        vv.oppgave = null;
+        vv.machine = null;
+        vv.steg = 1;
+      }
+    }
+    renderVeiviser();
+  },
   'edit-entry'(el) {
     const entry = state.entries.find((e) => e.id === el.dataset.id);
     if (entry) openEntryModal(entry);
@@ -1574,7 +1752,7 @@ const actions = {
       alert(String(err.message || err));
     }
   },
-  'close-modal'() { modal.close(); },
+  'close-modal'() { ui.vv = null; modal.close(); },
   export() { downloadExport(); },
   import() {
     const hasData = state.entries.length || state.projects.length;

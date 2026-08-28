@@ -367,6 +367,22 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
   margin-top: 6px;
 }
 
+/* Veiviser for ny timeføring: store valgknapper */
+.vvalg {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.vvalg .btn {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  text-align: left;
+}
+.vvalg .btn:disabled { opacity: .55; cursor: default; }
+
 /* Maskinens dag: sammenleggbar, trykkbar tidslinje */
 .dagdetalj {
   margin-top: 8px;

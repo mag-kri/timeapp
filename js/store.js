@@ -1,5 +1,5 @@
 // Datalager: hele tilstanden ligger i localStorage på enheten.
-import { isoDate, addDays } from './dates.js?v=16';
+import { isoDate, addDays } from './dates.js?v=17';
 
 const KEY = 'timeapp:data:v1';
 
@@ -47,6 +47,7 @@ function sanitize(raw) {
         note: typeof e.note === 'string' ? e.note.slice(0, 900) : '',
       };
       if (typeof e.machine === 'string' && e.machine.trim()) entry.machine = e.machine.slice(0, 60);
+      if (typeof e.task === 'string' && e.task.trim()) entry.task = e.task.slice(0, 40);
       if (typeof e.start === 'string' && typeof e.end === 'string') {
         entry.start = e.start;
         entry.end = e.end;
@@ -140,9 +141,10 @@ export function cancelActive() {
 
 /* --- Timeføringer --- */
 
-export function addEntry({ date, projectId, hours, note, machine, start, end }) {
+export function addEntry({ date, projectId, hours, note, machine, task, start, end }) {
   const entry = { id: uid(), date, projectId: projectId || null, hours, note: note || '' };
   if (machine) entry.machine = machine;
+  if (task) entry.task = task;
   if (start && end) {
     entry.start = start;
     entry.end = end;
@@ -405,6 +407,7 @@ export function mergeSkyEntries(list) {
       note: String(s.note || ''),
     };
     if (s.machine) entry.machine = String(s.machine);
+    if (s.task) entry.task = String(s.task).slice(0, 40);
     if (s.start && s.end) {
       entry.start = String(s.start);
       entry.end = String(s.end);

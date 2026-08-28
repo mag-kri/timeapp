@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS entries (
   date       TEXT NOT NULL,               -- YYYY-MM-DD
   project    TEXT,                        -- prosjektNAVN (id-ene er lokale per enhet)
   machine    TEXT,
+  task       TEXT,                        -- oppgave: Maskinfoerer/Hjelpemann/Annet
   hours      REAL NOT NULL,
   note       TEXT,
   start_at   TEXT,

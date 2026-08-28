@@ -6,7 +6,7 @@ const app = document.getElementById('app');
 const modal = document.getElementById('modal');
 
 const ui = {
-  tab: 'clock',
+  tab: 'day',
   date: d.todayISO(),
   weekStart: d.mondayOf(d.todayISO()),
   clockProject: '',
@@ -39,7 +39,7 @@ function render() {
     app.innerHTML = `<main class="page">${renderLogin()}</main>`;
     return;
   }
-  if (ui.tab === 'dash' && !erKoordinator()) ui.tab = 'clock';
+  if (ui.tab === 'dash' && !erKoordinator()) ui.tab = 'day';
   const pages = { clock: renderClock, day: renderDay, week: renderWeek, dash: renderDashboard, more: renderMore };
   app.innerHTML = `<main class="page">${pages[ui.tab]()}</main>${renderTabBar()}`;
   syncTimer();
@@ -122,7 +122,7 @@ async function loginFlyt(fn) {
     lagreAuth({ token: data.token, user: data.user, company: data.company });
     ui.loginJobber = false;
     ui.loginModus = 'login';
-    ui.tab = 'clock';
+    ui.tab = 'day';
     render();
     synkFraSky();
   } catch (err) {
@@ -139,8 +139,8 @@ function sjekkPassord(p1, p2) {
 
 function renderTabBar() {
   const tabs = [
-    ['clock', 'Stemple', icons.clock],
     ['day', 'Timer', icons.list],
+    ['clock', 'Stemple', icons.clock],
     ['week', 'Uke', icons.week],
     ...(erKoordinator() ? [['dash', 'Oversikt', icons.dash]] : []),
     ['more', 'Mer', icons.more],

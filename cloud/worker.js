@@ -37,7 +37,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 12;
+const VERSJON = 13;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -863,11 +863,24 @@ export default {
         const liste = Array.isArray(inn && inn.entries) ? inn.entries.slice(0, 50) : [];
         if (!liste.length) return json({ error: 'Ingen foeringer aa lagre' }, 400);
         let lagret = 0;
+        const avvist = [];
         for (const e of liste) {
           const id = String((e && e.id) || '').slice(0, 64);
           const dato = String((e && e.date) || '');
           const timer = Number(e && e.hours);
           if (!id || id.startsWith('ik-') || !/^\d{4}-\d{2}-\d{2}$/.test(dato) || !Number.isFinite(timer)) continue;
+          const maskin = e.machine ? String(e.machine).slice(0, 120) : null;
+          // En maskin kan bare foeres av EN person per dag
+          if (maskin) {
+            const opptatt = await spor(env,
+              `SELECT u.name FROM entries e2 JOIN users u ON u.email = e2.email
+               WHERE e2.company_id = ? AND e2.date = ? AND e2.machine = ? AND e2.email != ? LIMIT 1`,
+              oekt.bruker.company_id, dato, maskin, oekt.bruker.email).first();
+            if (opptatt) {
+              avvist.push({ id, feil: maskin + ' er allerede foert av ' + (opptatt.name || 'en kollega') + ' ' + dato });
+              continue;
+            }
+          }
           // Upsert - men bare eieren kan endre en eksisterende rad
           await spor(env,
             `INSERT INTO entries (id, email, company_id, date, project, machine, hours, note, start_at, end_at, updated_at)
@@ -878,7 +891,7 @@ export default {
              WHERE entries.email = excluded.email`,
             id, oekt.bruker.email, oekt.bruker.company_id, dato,
             e.project ? String(e.project).slice(0, 120) : null,
-            e.machine ? String(e.machine).slice(0, 120) : null,
+            maskin,
             Math.max(0, Math.min(24, timer)),
             String(e.note || '').slice(0, 900),
             e.start ? String(e.start).slice(0, 19) : null,
@@ -886,7 +899,18 @@ export default {
             iso()).run();
           lagret++;
         }
-        return json({ saved: lagret });
+        return json({ saved: lagret, avvist });
+      }
+
+      if (sti === '/api/timer/maskinbruk') {
+        // Hvem har foert timer paa hvilken maskin siste 30 dager - synlig for
+        // alle i bedriften, slik at velgeren kan graa ut opptatte maskiner
+        const fra = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+        const rader = await spor(env,
+          `SELECT e.date, e.machine, e.email, u.name FROM entries e JOIN users u ON u.email = e.email
+           WHERE e.company_id = ? AND e.machine IS NOT NULL AND e.date >= ? ORDER BY e.date DESC LIMIT 1000`,
+          oekt.bruker.company_id, fra).all();
+        return json({ bruk: rader.results || [] });
       }
 
       if (sti === '/api/timer/slett' && request.method === 'POST') {

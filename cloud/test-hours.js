@@ -23,6 +23,10 @@ export async function kjorTimeTest() {
           if (q.startsWith('SELECT config FROM integrations') || q.startsWith('SELECT connected_by FROM integrations')) {
             return db.integrations.get(a[0] + ':' + a[1]) || null;
           }
+          if (q.startsWith('SELECT u.name FROM entries e2')) {
+            const treff = [...db.entries.values()].find((e) => e.company_id === a[0] && e.date === a[1] && e.machine === a[2] && e.email !== a[3]);
+            return treff ? { name: (db.users.get(treff.email) || {}).name || 'Ukjent' } : null;
+          }
           return null;
         },
         async all() {
@@ -31,6 +35,9 @@ export async function kjorTimeTest() {
           }
           if (q.startsWith('SELECT e.id, e.email, u.name')) {
             return { results: [...db.entries.values()].filter((e) => e.company_id === a[0]).map((e) => ({ ...e, name: (db.users.get(e.email) || {}).name })) };
+          }
+          if (q.startsWith('SELECT e.date, e.machine, e.email, u.name')) {
+            return { results: [...db.entries.values()].filter((e) => e.company_id === a[0] && e.machine && e.date >= a[1]).map((e) => ({ date: e.date, machine: e.machine, email: e.email, name: (db.users.get(e.email) || {}).name })) };
           }
           return { results: [] };
         },
@@ -180,6 +187,13 @@ export async function kjorTimeTest() {
   await kallApi('/api/timer', { method: 'POST', token, body: { entries: [{ id: 'e2', date: idag, project: 'Prosjekt A', hours: 3.5, note: 'endret' }] } });
   db.entries.set('fremmed', { id: 'fremmed', email: 'x@y.no', company_id: 'ANNEN', date: idag, hours: 1 });
   await kallApi('/api/timer', { method: 'POST', token, body: { entries: [{ id: 'fremmed', date: idag, hours: 9 }] } });
+  // Maskinvern: en kollega har alt foert timer paa Sovende maskin i dag
+  const cid = [...db.companies.keys()][0];
+  db.users.set('kollega@b.no', { email: 'kollega@b.no', name: 'Kari Kollega', company_id: cid, role: 'employee', salt: 's', verifier: 'v' });
+  db.entries.set('k1', { id: 'k1', email: 'kollega@b.no', company_id: cid, date: idag, machine: 'Sovende maskin', hours: 6 });
+  const kollisjon = await kallApi('/api/timer', { method: 'POST', token, body: { entries: [{ id: 'e3', date: idag, machine: 'Sovende maskin', hours: 4 }] } });
+  const maskinbruk = await kallApi('/api/timer/maskinbruk', { token });
+
   const mineTimer = await kallApi('/api/timer', { token });
   const alleTimer = await kallApi('/api/timer?alle=1', { token });
   await kallApi('/api/timer/slett', { method: 'POST', token, body: { id: 'e1' } });
@@ -233,6 +247,12 @@ export async function kjorTimeTest() {
       alleHarNavn: (alleTimer.data?.entries || []).every((e) => e.name),
       fremmedUrort: db.entries.get('fremmed')?.hours === 1,
       etterSlett: (etterSlett.data?.entries || []).map((e) => e.id),
+    },
+    maskinvern: {
+      avvistMedNavn: (kollisjon.data?.avvist || []).some((x) => x.id === 'e3' && x.feil.includes('Kari Kollega')),
+      ikkeLagret: !db.entries.has('e3'),
+      egenGikkGjennom: db.entries.has('e2'),
+      brukListe: (maskinbruk.data?.bruk || []).map((b) => b.machine + ':' + b.name),
     },
     integrasjonerFoer: integFoer.data,
     tripletexKobling: kobleTT.data,

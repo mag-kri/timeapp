@@ -1,6 +1,6 @@
-import * as store from './store.js?v=12';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=12';
-import * as d from './dates.js?v=12';
+import * as store from './store.js?v=13';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=13';
+import * as d from './dates.js?v=13';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
@@ -659,7 +659,8 @@ function openEntryModal(entry, date) {
       <label class="field-label" for="efMachine">Maskin <span class="muted">(valgfritt – timene føres på deg uansett)</span></label>
       <select class="select" id="efMachine" name="machine">${machineOptions(
         values.projectId && store.projectById(values.projectId) ? store.projectById(values.projectId).name : null,
-        (entry && entry.machine) || ''
+        (entry && entry.machine) || '',
+        values.date
       )}</select>
       <p class="muted small" id="machineHint" style="margin:6px 0 0" hidden></p>`}
       <div class="timerow">
@@ -690,6 +691,7 @@ function openEntryModal(entry, date) {
     </form>`;
   modal.showModal();
   autosizeNote();
+  fetchMaskinbruk();
 }
 
 // Systemene et nytt prosjekt kan opprettes i samtidig. Kun koordinatorer,
@@ -753,12 +755,44 @@ function infrakitEntryFor(date, machine) {
   return state.entries.find((e) => e.machine === machine && e.date === date && e.id.startsWith('ik-')) || null;
 }
 
-// Nedtrekksvalg for maskin: kun faktiske maskiner fra valgt prosjekt.
-function machineOptions(projectName, selected) {
+// Hvem i bedriften som har ført timer på hvilken maskin (siste 30 dager),
+// slik at velgeren kan gråe ut maskiner som alt er tatt den dagen.
+async function fetchMaskinbruk() {
+  if (!auth()) return;
+  if (ui.henterBruk) return;
+  if (ui.maskinbruk && Date.now() - ui.maskinbruk.ts < 60000) return;
+  ui.henterBruk = true;
+  try {
+    const data = await api('api/timer/maskinbruk');
+    ui.maskinbruk = { ts: Date.now(), rows: data.bruk || [] };
+  } catch { /* uten svar vises alt som ledig - serveren stopper uansett */ }
+  finally {
+    ui.henterBruk = false;
+    if (document.getElementById('entryForm')) refreshMachineSelect();
+  }
+}
+
+// Maskinen er opptatt denne dagen hvis en ANNEN har ført timer på den
+function maskinOpptattAv(machine, date) {
+  const minEpost = (auth()?.user?.email) || '';
+  const treff = ((ui.maskinbruk && ui.maskinbruk.rows) || [])
+    .find((b) => b.date === date && b.machine === machine && b.email !== minEpost);
+  return treff ? (treff.name || treff.email) : null;
+}
+
+// Nedtrekksvalg for maskin: kun faktiske maskiner fra valgt prosjekt,
+// og maskiner andre alt har ført timer på denne dagen er grået ut.
+function machineOptions(projectName, selected, date) {
   const names = store.machinesForProject(projectName);
   if (selected && !names.includes(selected)) names.unshift(selected);
   return ['<option value="">Ingen maskin (arbeidstimer)</option>']
-    .concat(names.map((m) => `<option value="${esc(m)}"${m === selected ? ' selected' : ''}>${esc(m)}</option>`))
+    .concat(names.map((m) => {
+      const hvem = date ? maskinOpptattAv(m, date) : null;
+      if (hvem && m !== selected) {
+        return `<option value="${esc(m)}" disabled>${esc(m)} – opptatt (${esc(hvem)})</option>`;
+      }
+      return `<option value="${esc(m)}"${m === selected ? ' selected' : ''}>${esc(m)}</option>`;
+    }))
     .join('');
 }
 
@@ -768,7 +802,7 @@ function refreshMachineSelect() {
   const sel = document.getElementById('efMachine');
   if (!form || !sel || !form.projectId) return;
   const project = form.projectId.value ? store.projectById(form.projectId.value) : null;
-  sel.innerHTML = machineOptions(project ? project.name : null, sel.value);
+  sel.innerHTML = machineOptions(project ? project.name : null, sel.value, form.dataset.date);
   maybePrefillMachineHours();
 }
 
@@ -852,6 +886,13 @@ function saveEntryForm(form) {
     note: form.note.value.trim(),
   };
   if (form.machine) data.machine = form.machine.value.trim();
+  if (data.machine) {
+    const hvem = maskinOpptattAv(data.machine, date);
+    if (hvem) {
+      showFormError(`${data.machine} er allerede ført av ${hvem} denne dagen.`);
+      return;
+    }
+  }
   if (form.timeStart && form.timeEnd) {
     const ts = form.timeStart.value;
     const te = form.timeEnd.value;
@@ -922,7 +963,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 12;
+const APP_VERSJON = 13;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 
@@ -1164,8 +1205,17 @@ async function flushUtboks() {
   try {
     let x;
     while ((x = lesUtboks()[0])) {
-      if (x.op === 'lagre') await api('api/timer', { method: 'POST', body: { entries: [x.entry] } });
-      else await api('api/timer/slett', { method: 'POST', body: { id: x.id } });
+      if (x.op === 'lagre') {
+        const svar = await api('api/timer', { method: 'POST', body: { entries: [x.entry] } });
+        if (svar.avvist && svar.avvist.length) {
+          // F.eks. maskinen ble tatt av en annen mens vi var uten nett
+          alert('Ikke lagret i skyen: ' + svar.avvist.map((a) => a.feil).join('; '));
+          ui.maskinbruk = null;
+          fetchMaskinbruk();
+        }
+      } else {
+        await api('api/timer/slett', { method: 'POST', body: { id: x.id } });
+      }
       skrivUtboks(lesUtboks().slice(1));
     }
   } catch { /* proever igjen ved neste synk */ } finally {
@@ -1554,6 +1604,7 @@ function synkFraSky() {
   if (!auth()) return;
   flushUtboks();
   hentSkyTimer();
+  fetchMaskinbruk();
   fetchInfrakitStatus();
   fetchIntegrasjoner();
   fetchMachineList();

@@ -148,9 +148,10 @@ export function addEntry({ date, projectId, hours, note, machine, start, end }) 
 
 export function updateEntry(id, patch) {
   const entry = state.entries.find((e) => e.id === id);
-  if (!entry) return;
+  if (!entry) return null;
   Object.assign(entry, patch);
   commit();
+  return entry;
 }
 
 export function deleteEntry(id) {
@@ -192,15 +193,17 @@ export function projectById(id) {
 
 /* --- Oppslag --- */
 
+// Dine egne føringer – også når du har valgt maskin. Kun de auto-synkede
+// Infrakit-oppføringene (ik-…) hører hjemme under Maskintimer.
 export function entriesOn(date) {
   return state.entries
-    .filter((e) => e.date === date && !e.machine)
+    .filter((e) => e.date === date && !e.id.startsWith('ik-'))
     .sort((a, b) => ((a.start || '9999') < (b.start || '9999') ? -1 : 1));
 }
 
 export function machineEntriesOn(date) {
   return state.entries
-    .filter((e) => e.date === date && e.machine)
+    .filter((e) => e.date === date && e.id.startsWith('ik-'))
     .sort((a, b) => (a.machine < b.machine ? -1 : 1));
 }
 
@@ -358,6 +361,35 @@ export function machinesForProject(projectName) {
     names.push(...state.entries.filter((e) => e.machine).map((e) => e.machine));
   }
   return [...new Set(names)].sort();
+}
+
+// Fletter inn egne føringer hentet fra skyen (andre enheter). Lokale
+// oppføringer vinner – usendte endringer ligger i utboksen og pushes opp.
+export function mergeSkyEntries(list) {
+  const navn = [...new Set((list || []).map((e) => e && e.project).filter(Boolean))];
+  if (navn.length) ensureProjects(navn.map(String));
+  const prosjektId = new Map(state.projects.map((p) => [p.name.trim().toLowerCase(), p.id]));
+  let endret = 0;
+  for (const s of list || []) {
+    if (!s || !s.id || !s.date || String(s.id).startsWith('ik-')) continue;
+    if (state.entries.some((e) => e.id === s.id)) continue;
+    const entry = {
+      id: String(s.id),
+      date: String(s.date),
+      projectId: s.project ? prosjektId.get(String(s.project).trim().toLowerCase()) || null : null,
+      hours: Number(s.hours) || 0,
+      note: String(s.note || ''),
+    };
+    if (s.machine) entry.machine = String(s.machine);
+    if (s.start && s.end) {
+      entry.start = String(s.start);
+      entry.end = String(s.end);
+    }
+    state.entries.push(entry);
+    endret++;
+  }
+  if (endret) commit();
+  return endret;
 }
 
 export function machinesForWeek(mondayIso) {

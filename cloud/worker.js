@@ -24,6 +24,9 @@
 //   GET  /api/integrasjoner     hvilke systemer bedriften er koblet til
 //   POST /api/integrasjoner/tripletex  koordinator: lagre Tripletex-tokens
 //   POST /api/prosjekt/opprett  koordinator: opprett prosjekt i valgte systemer
+//   POST /api/timer             lagre egne timefoeringer (upsert, batch)
+//   POST /api/timer/slett       slett egen timefoering
+//   GET  /api/timer             egne foeringer; ?alle=1 gir bedriftens (koordinator)
 //
 // Bindinger i Cloudflare:
 //   D1-database bundet som  DB          (skjema: cloud/schema.sql)
@@ -34,7 +37,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 10;
+const VERSJON = 11;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -736,7 +739,8 @@ export default {
       }
 
       if (sti.startsWith('/api/users') || sti.startsWith('/api/infrakit')
-        || sti.startsWith('/api/integrasjoner') || sti.startsWith('/api/prosjekt')) {
+        || sti.startsWith('/api/integrasjoner') || sti.startsWith('/api/prosjekt')
+        || sti.startsWith('/api/timer')) {
         if (!oekt) return json({ error: 'Ikke innlogget' }, 401);
       }
 
@@ -843,6 +847,67 @@ export default {
         } catch (err) {
           return json({ error: 'Infrakit-kallet feilet: ' + (err.message || err) }, 502);
         }
+      }
+
+      /* --- Timefoeringer i skyen --- */
+
+      if (sti === '/api/timer' && request.method === 'POST') {
+        const inn = await lesInn();
+        const liste = Array.isArray(inn && inn.entries) ? inn.entries.slice(0, 50) : [];
+        if (!liste.length) return json({ error: 'Ingen foeringer aa lagre' }, 400);
+        let lagret = 0;
+        for (const e of liste) {
+          const id = String((e && e.id) || '').slice(0, 64);
+          const dato = String((e && e.date) || '');
+          const timer = Number(e && e.hours);
+          if (!id || id.startsWith('ik-') || !/^\d{4}-\d{2}-\d{2}$/.test(dato) || !Number.isFinite(timer)) continue;
+          // Upsert - men bare eieren kan endre en eksisterende rad
+          await spor(env,
+            `INSERT INTO entries (id, email, company_id, date, project, machine, hours, note, start_at, end_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET date = excluded.date, project = excluded.project,
+             machine = excluded.machine, hours = excluded.hours, note = excluded.note,
+             start_at = excluded.start_at, end_at = excluded.end_at, updated_at = excluded.updated_at
+             WHERE entries.email = excluded.email`,
+            id, oekt.bruker.email, oekt.bruker.company_id, dato,
+            e.project ? String(e.project).slice(0, 120) : null,
+            e.machine ? String(e.machine).slice(0, 120) : null,
+            Math.max(0, Math.min(24, timer)),
+            String(e.note || '').slice(0, 900),
+            e.start ? String(e.start).slice(0, 19) : null,
+            e.end ? String(e.end).slice(0, 19) : null,
+            iso()).run();
+          lagret++;
+        }
+        return json({ saved: lagret });
+      }
+
+      if (sti === '/api/timer/slett' && request.method === 'POST') {
+        const inn = await lesInn();
+        const id = String((inn && inn.id) || '');
+        if (!id) return json({ error: 'Mangler id' }, 400);
+        await spor(env, 'DELETE FROM entries WHERE id = ? AND email = ?', id, oekt.bruker.email).run();
+        return json({ deleted: id });
+      }
+
+      if (sti === '/api/timer') {
+        const alle = url.searchParams.get('alle') === '1';
+        if (alle && oekt.bruker.role !== 'coordinator') {
+          return json({ error: 'Kun koordinator kan se alles timer' }, 403);
+        }
+        const rader = alle
+          ? await spor(env,
+            `SELECT e.id, e.email, u.name, e.date, e.project, e.machine, e.hours, e.note, e.start_at, e.end_at
+             FROM entries e JOIN users u ON u.email = e.email
+             WHERE e.company_id = ? ORDER BY e.date DESC LIMIT 1000`, oekt.bruker.company_id).all()
+          : await spor(env,
+            `SELECT id, date, project, machine, hours, note, start_at, end_at
+             FROM entries WHERE email = ? ORDER BY date DESC LIMIT 1000`, oekt.bruker.email).all();
+        const entries = (rader.results || []).map((r) => ({
+          id: r.id, email: r.email, name: r.name, date: r.date, project: r.project,
+          machine: r.machine, hours: r.hours, note: r.note, start: r.start_at, end: r.end_at,
+        }));
+        return json({ entries });
       }
 
       /* --- Integrasjoner og prosjektoppretting --- */

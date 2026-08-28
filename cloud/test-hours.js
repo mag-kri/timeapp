@@ -3,7 +3,7 @@ export async function kjorTimeTest() {
   const src = await fetch('cloud/worker.js?v=' + Date.now()).then((r) => r.text());
   const mod = await import(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
 
-  const db = { companies: new Map(), users: new Map(), invites: new Map(), sessions: new Map(), integrations: new Map() };
+  const db = { companies: new Map(), users: new Map(), invites: new Map(), sessions: new Map(), integrations: new Map(), entries: new Map() };
   const norm = (s) => s.replace(/\s+/g, ' ').trim();
   const DB = {
     prepare(sql) {
@@ -25,13 +25,31 @@ export async function kjorTimeTest() {
           }
           return null;
         },
-        async all() { return { results: [] }; },
+        async all() {
+          if (q.startsWith('SELECT id, date, project, machine, hours, note, start_at, end_at FROM entries')) {
+            return { results: [...db.entries.values()].filter((e) => e.email === a[0]) };
+          }
+          if (q.startsWith('SELECT e.id, e.email, u.name')) {
+            return { results: [...db.entries.values()].filter((e) => e.company_id === a[0]).map((e) => ({ ...e, name: (db.users.get(e.email) || {}).name })) };
+          }
+          return { results: [] };
+        },
         async run() {
           if (q.startsWith('INSERT INTO companies')) db.companies.set(a[0], { id: a[0], name: a[1], created_at: a[2], refresh_token: null });
           else if (q.startsWith('INSERT INTO users')) db.users.set(a[0], { email: a[0], name: a[1], company_id: a[2], role: a[3], salt: a[4], verifier: a[5], created_at: a[6] });
           else if (q.startsWith('INSERT INTO sessions')) db.sessions.set(a[0], { token: a[0], email: a[1], expires_at: a[2] });
           else if (q.startsWith('UPDATE companies SET refresh_token = ?, connected_by')) { const c = db.companies.get(a[3]); if (c) c.refresh_token = a[0]; }
           else if (q.startsWith('INSERT INTO integrations')) db.integrations.set(a[0] + ':' + a[1], { config: a[2], connected_by: a[3] });
+          else if (q.startsWith('INSERT INTO entries')) {
+            const fantes = db.entries.get(a[0]);
+            if (!fantes || fantes.email === a[1]) {
+              db.entries.set(a[0], { id: a[0], email: a[1], company_id: a[2], date: a[3], project: a[4], machine: a[5], hours: a[6], note: a[7], start_at: a[8], end_at: a[9] });
+            }
+          }
+          else if (q.startsWith('DELETE FROM entries')) {
+            const e = db.entries.get(a[0]);
+            if (e && e.email === a[1]) db.entries.delete(a[0]);
+          }
           return { success: true };
         },
       };
@@ -154,6 +172,20 @@ export async function kjorTimeTest() {
   const kunP2 = await kallApi('/api/infrakit/hours?projectId=2', { token });
   const kallPerProsjekt = kall.length;
 
+  // Timefoeringer i skyen: lagre, oppdatere, hente, slette - og eierskapsvern
+  await kallApi('/api/timer', { method: 'POST', token, body: { entries: [
+    { id: 'e1', date: idag, project: 'Prosjekt A', machine: 'Gravemaskin A', hours: 8.2, note: 'dagsrapport', start: idag + 'T07:00:00', end: idag + 'T15:30:00' },
+    { id: 'e2', date: idag, project: 'Prosjekt A', hours: 2, note: '' },
+  ] } });
+  await kallApi('/api/timer', { method: 'POST', token, body: { entries: [{ id: 'e2', date: idag, project: 'Prosjekt A', hours: 3.5, note: 'endret' }] } });
+  db.entries.set('fremmed', { id: 'fremmed', email: 'x@y.no', company_id: 'ANNEN', date: idag, hours: 1 });
+  await kallApi('/api/timer', { method: 'POST', token, body: { entries: [{ id: 'fremmed', date: idag, hours: 9 }] } });
+  const mineTimer = await kallApi('/api/timer', { token });
+  const alleTimer = await kallApi('/api/timer?alle=1', { token });
+  await kallApi('/api/timer/slett', { method: 'POST', token, body: { id: 'e1' } });
+  await kallApi('/api/timer/slett', { method: 'POST', token, body: { id: 'fremmed' } });
+  const etterSlett = await kallApi('/api/timer', { token });
+
   // Integrasjoner: koble Tripletex, sjekk status, opprett prosjekt i tre systemer
   const integFoer = await kallApi('/api/integrasjoner', { token });
   const kobleTT = await kallApi('/api/integrasjoner/tripletex', { method: 'POST', token, body: { consumerToken: 'ct', employeeToken: 'et' } });
@@ -190,6 +222,12 @@ export async function kjorTimeTest() {
     prosjektbytter: byttelogg,
     aktivtProsjektTilSlutt: aktivtProsjekt,
     satteTilbake: aktivtProsjekt === 1,
+    skyTimer: {
+      mine: (mineTimer.data?.entries || []).map((e) => e.id + ' ' + e.hours + 't ' + (e.machine || '-') + ' ' + (e.note || '-')),
+      alleHarNavn: (alleTimer.data?.entries || []).every((e) => e.name),
+      fremmedUrort: db.entries.get('fremmed')?.hours === 1,
+      etterSlett: (etterSlett.data?.entries || []).map((e) => e.id),
+    },
     integrasjonerFoer: integFoer.data,
     tripletexKobling: kobleTT.data,
     integrasjonerEtter: integEtter.data,

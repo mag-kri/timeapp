@@ -26,6 +26,7 @@ export async function kjorAppTest() {
             const u = db.users.get(s.email);
             return u ? { token: s.token, ...u } : null;
           }
+          if (q.includes('FROM integrations')) return null;
           throw new Error('Ukjent first: ' + q);
         },
         async all() {
@@ -35,6 +36,7 @@ export async function kjorAppTest() {
           if (q.includes('FROM invites WHERE company_id')) {
             return { results: [...db.invites.values()].filter((i) => i.company_id === a[0] && i.expires_at > a[1]) };
           }
+          if (q.includes('FROM entries')) return { results: [] };
           throw new Error('Ukjent all: ' + q);
         },
         async run() {
@@ -49,6 +51,7 @@ export async function kjorAppTest() {
           else if (q.startsWith('DELETE FROM sessions WHERE token')) db.sessions.delete(a[0]);
           else if (q.startsWith('DELETE FROM sessions WHERE email')) { for (const [k, s] of db.sessions) if (s.email === a[0]) db.sessions.delete(k); }
           else if (q.startsWith('DELETE FROM users')) db.users.delete(a[0]);
+          else if (q.startsWith('INSERT INTO entries') || q.startsWith('DELETE FROM entries') || q.startsWith('INSERT INTO integrations')) { /* dekkes av test-hours */ }
           else throw new Error('Ukjent run: ' + q);
           return { success: true };
         },

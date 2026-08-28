@@ -456,7 +456,7 @@ function openEntryModal(entry, date) {
       <label class="field-label" for="efProject">Prosjekt</label>
       ${projectSelect('id="efProject" name="projectId"', values.projectId || '')}
       ${entry && entry.machine && entry.id.startsWith('ik-') ? '' : `
-      <label class="field-label" for="efMachine">Maskin <span class="muted">(valgfritt – la stå tom for arbeidstimer)</span></label>
+      <label class="field-label" for="efMachine">Maskin <span class="muted">(valgfritt – timene føres på deg uansett)</span></label>
       <select class="select" id="efMachine" name="machine">${machineOptions(
         values.projectId && store.projectById(values.projectId) ? store.projectById(values.projectId).name : null,
         (entry && entry.machine) || ''
@@ -650,16 +650,17 @@ function saveEntryForm(form) {
   }
   const id = form.dataset.editId;
   ui.date = date;
+  let lagret = null;
   if (id) {
-    store.updateEntry(id, data);
+    lagret = store.updateEntry(id, data);
   } else {
-    // Unngå duplikat: finnes det alt en føring for samme maskin + dag + prosjekt, oppdater den
+    // Unngå duplikat blant DINE føringer (aldri rør de auto-synkede ik-oppføringene)
     const dup = data.machine
-      ? state.entries.find((e) => e.machine === data.machine && e.date === data.date && (e.projectId || null) === data.projectId)
+      ? state.entries.find((e) => !e.id.startsWith('ik-') && e.machine === data.machine && e.date === data.date && (e.projectId || null) === data.projectId)
       : null;
-    if (dup) store.updateEntry(dup.id, data);
-    else store.addEntry(data);
+    lagret = dup ? store.updateEntry(dup.id, data) : store.addEntry(data);
   }
+  if (lagret && !lagret.id.startsWith('ik-')) skyLagre(lagret);
   modal.close();
 }
 
@@ -905,6 +906,70 @@ async function fetchIntegrasjoner() {
   if (ui.tab === 'more') render();
 }
 
+/* --- Timeføringer i skyen: utboks med ett forsøk per synk --- */
+
+function lesUtboks() {
+  try {
+    return JSON.parse(localStorage.getItem('timeapp:utboks') || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function skrivUtboks(u) {
+  try {
+    localStorage.setItem('timeapp:utboks', JSON.stringify(u.slice(-200)));
+  } catch { /* lagring utilgjengelig */ }
+}
+
+// Legger føringen i utboksen og prøver å sende med en gang. Feiler nettet,
+// blir den liggende og går opp ved neste synk.
+function skyLagre(entry) {
+  if (!entry || entry.id.startsWith('ik-')) return;
+  const p = entry.projectId ? store.projectById(entry.projectId) : null;
+  const u = lesUtboks().filter((x) => !(x.op === 'lagre' && x.entry.id === entry.id));
+  u.push({ op: 'lagre', entry: {
+    id: entry.id, date: entry.date, project: p ? p.name : null,
+    machine: entry.machine || null, hours: entry.hours, note: entry.note || '',
+    start: entry.start || null, end: entry.end || null,
+  } });
+  skrivUtboks(u);
+  flushUtboks();
+}
+
+function skySlett(id) {
+  if (!id || id.startsWith('ik-')) return;
+  const u = lesUtboks().filter((x) => !(x.op === 'lagre' && x.entry.id === id));
+  u.push({ op: 'slett', id });
+  skrivUtboks(u);
+  flushUtboks();
+}
+
+let utboksSender = false;
+async function flushUtboks() {
+  if (utboksSender || !auth()) return;
+  utboksSender = true;
+  try {
+    let x;
+    while ((x = lesUtboks()[0])) {
+      if (x.op === 'lagre') await api('api/timer', { method: 'POST', body: { entries: [x.entry] } });
+      else await api('api/timer/slett', { method: 'POST', body: { id: x.id } });
+      skrivUtboks(lesUtboks().slice(1));
+    }
+  } catch { /* proever igjen ved neste synk */ } finally {
+    utboksSender = false;
+  }
+}
+
+// Henter egne føringer fra skyen (f.eks. ført på en annen enhet)
+async function hentSkyTimer() {
+  if (!auth()) return;
+  try {
+    const data = await api('api/timer');
+    if (store.mergeSkyEntries(data.entries || [])) render();
+  } catch { /* skyen er kjekk aa ha, ikke maa ha */ }
+}
+
 // Koordinator oppretter bruker til en ansatt og får en engangskode.
 function openInviteUserModal() {
   modal.innerHTML = `
@@ -1103,6 +1168,7 @@ const actions = {
   'delete-entry'(el) {
     if (confirm('Slette denne timeføringen?')) {
       store.deleteEntry(el.dataset.id);
+      skySlett(el.dataset.id);
       modal.close();
     }
   },
@@ -1267,6 +1333,8 @@ document.addEventListener('visibilitychange', () => {
 
 function synkFraSky() {
   if (!auth()) return;
+  flushUtboks();
+  hentSkyTimer();
   fetchInfrakitStatus();
   fetchIntegrasjoner();
   fetchMachineList();

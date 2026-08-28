@@ -49,3 +49,19 @@ CREATE TABLE IF NOT EXISTS integrations (
   connected_at TEXT,
   PRIMARY KEY (company_id, system)
 );
+
+CREATE TABLE IF NOT EXISTS entries (
+  id         TEXT PRIMARY KEY,            -- klientens id (aldri ik-)
+  email      TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+  company_id TEXT NOT NULL,
+  date       TEXT NOT NULL,               -- YYYY-MM-DD
+  project    TEXT,                        -- prosjektNAVN (id-ene er lokale per enhet)
+  machine    TEXT,
+  hours      REAL NOT NULL,
+  note       TEXT,
+  start_at   TEXT,
+  end_at     TEXT,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entries_company_date ON entries(company_id, date);
+CREATE INDEX IF NOT EXISTS idx_entries_email_date ON entries(email, date);

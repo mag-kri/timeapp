@@ -792,7 +792,9 @@ function machineOptions(projectName, selected, date) {
       if (hvem && m !== selected) {
         return `<option value="${esc(m)}" disabled>${esc(m)} – opptatt (${esc(hvem)})</option>`;
       }
-      return `<option value="${esc(m)}"${m === selected ? ' selected' : ''}>${esc(m)}</option>`;
+      // Egen maskin er fortsatt valgbar, men merkes saa man ser at vernet virker
+      const minEgen = date && state.entries.some((e) => !e.id.startsWith('ik-') && e.machine === m && e.date === date);
+      return `<option value="${esc(m)}"${m === selected ? ' selected' : ''}>${esc(m)}${minEgen ? ' – ført av deg' : ''}</option>`;
     }))
     .join('');
 }

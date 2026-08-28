@@ -51,6 +51,11 @@ function sanitize(raw) {
         entry.start = e.start;
         entry.end = e.end;
       }
+      // Strukturerte maskindata fra Infrakit (brukes i koordinatoroversikten)
+      if (Number(e.points) > 0) entry.points = Number(e.points);
+      if (e.codes && typeof e.codes === 'object' && !Array.isArray(e.codes)) entry.codes = e.codes;
+      if (Array.isArray(e.models)) entry.models = e.models.filter((m) => m && typeof m.name === 'string').slice(0, 40);
+      if (Number(e.noModelHours) > 0) entry.noModelHours = Number(e.noModelHours);
       out.entries.push(entry);
     }
   }
@@ -265,11 +270,25 @@ export function syncMachineHours(days, opts = {}) {
     const id = `ik-${item.date}-${slug(machine)}-${slug(item.project || '')}`;
     seenDates.add(item.date);
     seenIds.add(id);
+    const ekstra = {
+      points: Number(item.points) > 0 ? Number(item.points) : 0,
+      codes: item.codes && typeof item.codes === 'object' ? item.codes : null,
+      models: Array.isArray(item.models) ? item.models : null,
+      noModelHours: Number(item.noModelHours) > 0 ? Number(item.noModelHours) : 0,
+    };
+    const settEkstra = (e) => {
+      if (ekstra.points) e.points = ekstra.points; else delete e.points;
+      if (ekstra.codes) e.codes = ekstra.codes; else delete e.codes;
+      if (ekstra.models) e.models = ekstra.models; else delete e.models;
+      if (ekstra.noModelHours) e.noModelHours = ekstra.noModelHours; else delete e.noModelHours;
+    };
     const existing = state.entries.find((e) => e.id === id);
     if (existing) {
+      const ekstraEndret = JSON.stringify([existing.points || 0, existing.codes || null, existing.models || null, existing.noModelHours || 0])
+        !== JSON.stringify([ekstra.points, ekstra.codes, ekstra.models, ekstra.noModelHours]);
       if (
         existing.hours !== hours || existing.projectId !== projectId || existing.note !== note ||
-        (existing.start || null) !== start || (existing.end || null) !== end
+        (existing.start || null) !== start || (existing.end || null) !== end || ekstraEndret
       ) {
         existing.hours = hours;
         existing.projectId = projectId;
@@ -281,6 +300,7 @@ export function syncMachineHours(days, opts = {}) {
           delete existing.start;
           delete existing.end;
         }
+        settEkstra(existing);
         changed++;
       }
     } else {
@@ -289,6 +309,7 @@ export function syncMachineHours(days, opts = {}) {
         entry.start = start;
         entry.end = end;
       }
+      settEkstra(entry);
       state.entries.push(entry);
       changed++;
     }

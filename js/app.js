@@ -29,6 +29,7 @@ const icons = {
   list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>',
   week: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M5 19v-8M12 19V5M19 19v-5"/></svg>',
   more: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
+  dash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><rect x="4" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.2"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.2"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.2"/></svg>',
 };
 
 /* ---------- Render ---------- */
@@ -38,7 +39,8 @@ function render() {
     app.innerHTML = `<main class="page">${renderLogin()}</main>`;
     return;
   }
-  const pages = { clock: renderClock, day: renderDay, week: renderWeek, more: renderMore };
+  if (ui.tab === 'dash' && !erKoordinator()) ui.tab = 'clock';
+  const pages = { clock: renderClock, day: renderDay, week: renderWeek, dash: renderDashboard, more: renderMore };
   app.innerHTML = `<main class="page">${pages[ui.tab]()}</main>${renderTabBar()}`;
   syncTimer();
 }
@@ -140,6 +142,7 @@ function renderTabBar() {
     ['clock', 'Stemple', icons.clock],
     ['day', 'Timer', icons.list],
     ['week', 'Uke', icons.week],
+    ...(erKoordinator() ? [['dash', 'Oversikt', icons.dash]] : []),
     ['more', 'Mer', icons.more],
   ];
   return `<nav class="tabbar" aria-label="Hovedmeny">${tabs.map(([id, label, icon]) => `
@@ -181,6 +184,215 @@ function entryList(entries) {
       </button>
     </li>`;
   }).join('')}</ul>`;
+}
+
+/* --- Oversikt (kun koordinator) --- */
+
+// Alle bedriftens føringer fra skyen, bufret i ett minutt
+async function hentAlleTimer() {
+  if (!erKoordinator()) return;
+  if (ui.henterAlle) return;
+  if (ui.alleTimer && Date.now() - ui.alleTimer.ts < 60000) return;
+  ui.henterAlle = true;
+  try {
+    const data = await api('api/timer?alle=1');
+    ui.alleTimer = { ts: Date.now(), entries: data.entries || [] };
+  } catch {
+    if (!ui.alleTimer) ui.alleTimer = { ts: 0, entries: [] };
+  } finally {
+    ui.henterAlle = false;
+    if (ui.tab === 'dash') render();
+  }
+}
+
+// Maskindagen (ik-oppføring) som hører til en ansatts føring
+const ikFor = (maskin, dato) =>
+  state.entries.find((e) => e.id.startsWith('ik-') && e.date === dato && e.machine === maskin);
+
+function dashGrunnlag() {
+  if (!ui.dashUke) ui.dashUke = d.mondayOf(d.todayISO());
+  const monday = ui.dashUke;
+  const dagSet = new Set(Array.from({ length: 7 }, (_, i) => d.addDays(monday, i)));
+  const alle = ((ui.alleTimer && ui.alleTimer.entries) || []).filter((e) => e && dagSet.has(e.date));
+  const ikDager = state.entries.filter((e) => e.id.startsWith('ik-') && dagSet.has(e.date));
+  return { monday, alle, ikDager };
+}
+
+const ikProsjektNavn = (e) => {
+  const p = e.projectId ? store.projectById(e.projectId) : null;
+  return p ? p.name : 'Uten prosjekt';
+};
+
+function renderDashboard() {
+  hentAlleTimer();
+  const { monday, alle, ikDager } = dashGrunnlag();
+  const { week } = d.isoWeek(monday);
+  const nav = `
+    <header class="page-head"><h1>Oversikt</h1></header>
+    <div class="datenav">
+      <button class="iconbtn" data-action="dash-prev" aria-label="Forrige uke">‹</button>
+      <div class="datelabel-static"><span>Uke ${week}</span><span class="muted">${d.weekRangeLabel(monday)}</span></div>
+      <button class="iconbtn" data-action="dash-next" aria-label="Neste uke">›</button>
+    </div>
+    ${monday === d.mondayOf(d.todayISO()) ? '' : '<div class="center"><button class="btn ghost small" data-action="dash-current">Gå til denne uka</button></div>'}`;
+
+  if (ui.dashProsjekt) return nav + renderDashProsjekt(alle, ikDager);
+
+  if (!ui.alleTimer) return nav + '<section class="card"><p class="empty">Henter bedriftens timer …</p></section>';
+
+  // Per ansatt: timer, punkter og hva de kjørte
+  const ansatte = new Map();
+  for (const e of alle) {
+    const k = e.email || e.name || '?';
+    if (!ansatte.has(k)) ansatte.set(k, { navn: e.name || e.email || '?', timer: 0, punkter: 0, maskiner: new Set(), modeller: new Set() });
+    const a = ansatte.get(k);
+    a.timer += Number(e.hours) || 0;
+    if (e.machine) {
+      a.maskiner.add(e.machine);
+      const ik = ikFor(e.machine, e.date);
+      if (ik) {
+        a.punkter += ik.points || 0;
+        for (const m of ik.models || []) a.modeller.add(m.name);
+      }
+    }
+  }
+  const ansattRader = [...ansatte.values()].sort((a, b) => b.timer - a.timer).map((a) => `
+    <li><span class="legend-name">${esc(a.navn)}
+      <span class="muted small" style="display:block">${[
+        a.maskiner.size ? [...a.maskiner].map(esc).join(', ') : 'kun arbeidstimer',
+        a.punkter ? a.punkter + ' punkter' : '',
+        a.modeller.size ? a.modeller.size + ' modeller' : '',
+      ].filter(Boolean).join(' · ')}</span></span>
+    <span class="legend-hours">${d.fmtHours(a.timer)} t</span></li>`).join('');
+
+  // Per prosjekt: folk, timer, maskintimer og punkter
+  const prosjekter = new Map();
+  const pros = (navn) => {
+    const k = navn || 'Uten prosjekt';
+    if (!prosjekter.has(k)) prosjekter.set(k, { navn: k, timer: 0, folk: new Set(), maskinTimer: 0, punkter: 0 });
+    return prosjekter.get(k);
+  };
+  for (const e of alle) {
+    const p = pros(e.project);
+    p.timer += Number(e.hours) || 0;
+    p.folk.add(e.name || e.email);
+  }
+  for (const ik of ikDager) {
+    const p = pros(ikProsjektNavn(ik));
+    p.maskinTimer += ik.hours;
+    p.punkter += ik.points || 0;
+  }
+  const prosjektRader = [...prosjekter.values()]
+    .sort((a, b) => (b.timer + b.maskinTimer) - (a.timer + a.maskinTimer))
+    .map((p) => `
+      <li><button class="entry" data-action="dash-project" data-navn="${esc(p.navn)}">
+        <span class="entry-main">
+          <span class="entry-title">${esc(p.navn)}</span>
+          <span class="entry-sub muted">${[
+            p.folk.size ? p.folk.size + (p.folk.size === 1 ? ' ansatt' : ' ansatte') : '',
+            p.maskinTimer ? d.fmtHours(p.maskinTimer) + ' maskintimer' : '',
+            p.punkter ? p.punkter + ' punkter' : '',
+          ].filter(Boolean).join(' · ') || 'kun maskindata'}</span>
+        </span>
+        <span class="entry-hours">${p.timer ? d.fmtHours(p.timer) + ' t' : '–'}</span>
+      </button></li>`).join('');
+
+  return `${nav}
+    <section class="card">
+      <h2>Ansatte</h2>
+      ${ansatte.size ? `<ul class="legend">${ansattRader}</ul>` : '<p class="empty">Ingen føringer denne uka.</p>'}
+      <div class="day-total"><span>Sum arbeidstimer</span><strong>${d.fmtHours([...ansatte.values()].reduce((s, a) => s + a.timer, 0))} t</strong></div>
+    </section>
+    <section class="card">
+      <h2>Prosjekter</h2>
+      ${prosjekter.size ? `<ul class="entries">${prosjektRader}</ul>` : '<p class="empty">Ingenting registrert denne uka.</p>'}
+      <p class="muted small" style="margin:10px 0 0">Trykk på et prosjekt for maskiner, modeller og punktkoder. Maskindata finnes for de siste ~14 dagene.</p>
+    </section>`;
+}
+
+function renderDashProsjekt(alle, ikDager) {
+  const navn = ui.dashProsjekt;
+  const mine = alle.filter((e) => (e.project || 'Uten prosjekt') === navn);
+  const ik = ikDager.filter((e) => ikProsjektNavn(e) === navn);
+
+  // Hvem førte timer her
+  const folk = new Map();
+  for (const e of mine) {
+    const k = e.email || e.name || '?';
+    if (!folk.has(k)) folk.set(k, { navn: e.name || e.email || '?', timer: 0, maskiner: new Set() });
+    const f = folk.get(k);
+    f.timer += Number(e.hours) || 0;
+    if (e.machine) f.maskiner.add(e.machine);
+  }
+
+  // Maskinene på prosjektet denne uka
+  const maskiner = new Map();
+  for (const e of ik) {
+    if (!maskiner.has(e.machine)) maskiner.set(e.machine, { timer: 0, punkter: 0 });
+    const m = maskiner.get(e.machine);
+    m.timer += e.hours;
+    m.punkter += e.points || 0;
+  }
+
+  // Modeller: hvem kjørte på hvilken flate, og hvor lenge
+  const foererFor = (maskin, dato) => alle
+    .filter((a) => a.machine === maskin && a.date === dato)
+    .map((a) => a.name || a.email);
+  const modeller = new Map();
+  let utenModell = 0;
+  const utenModellHvem = new Set();
+  for (const e of ik) {
+    for (const m of e.models || []) {
+      if (!modeller.has(m.name)) modeller.set(m.name, { timer: 0, hvem: new Set() });
+      const mo = modeller.get(m.name);
+      mo.timer += Number(m.hours) || 0;
+      for (const navn2 of foererFor(e.machine, e.date)) mo.hvem.add(navn2);
+    }
+    if (e.noModelHours) {
+      utenModell += e.noModelHours;
+      for (const navn2 of foererFor(e.machine, e.date)) utenModellHvem.add(navn2);
+    }
+  }
+
+  // Punktkoder samlet for prosjektet
+  const koder = new Map();
+  for (const e of ik) {
+    for (const [kode, n] of Object.entries(e.codes || {})) koder.set(kode, (koder.get(kode) || 0) + n);
+  }
+
+  const hvemTekst = (sett) => (sett.size ? [...sett].map(esc).join(', ') : 'ingen har ført timer på maskinen');
+
+  return `
+    <div class="center" style="margin-bottom:10px"><button class="btn ghost small" data-action="dash-back">‹ Alle prosjekter</button></div>
+    <section class="card">
+      <h2>${esc(navn)}</h2>
+      ${folk.size ? `<ul class="legend">${[...folk.values()].sort((a, b) => b.timer - a.timer).map((f) => `
+        <li><span class="legend-name">${esc(f.navn)}${f.maskiner.size ? `<span class="muted small" style="display:block">${[...f.maskiner].map(esc).join(', ')}</span>` : ''}</span>
+        <span class="legend-hours">${d.fmtHours(f.timer)} t</span></li>`).join('')}</ul>`
+    : '<p class="empty">Ingen ansatte har ført timer her denne uka.</p>'}
+    </section>
+    ${maskiner.size ? `
+    <section class="card">
+      <h2>Maskiner</h2>
+      <ul class="legend">${[...maskiner].sort((a, b) => b[1].timer - a[1].timer).map(([mn, m]) => `
+        <li><span class="legend-name">${esc(mn)}${m.punkter ? `<span class="muted small" style="display:block">${m.punkter} punkter</span>` : ''}</span>
+        <span class="legend-hours">${d.fmtHours(m.timer)} t</span></li>`).join('')}</ul>
+    </section>` : ''}
+    ${modeller.size || utenModell ? `
+    <section class="card">
+      <h2>Modeller</h2>
+      <ul class="legend">${[...modeller].sort((a, b) => b[1].timer - a[1].timer).map(([mn, m]) => `
+        <li><span class="legend-name">${esc(mn)}<span class="muted small" style="display:block">${hvemTekst(m.hvem)}</span></span>
+        <span class="legend-hours">${d.fmtHours(m.timer)} t</span></li>`).join('')}
+      ${utenModell ? `<li><span class="legend-name">Uten modell<span class="muted small" style="display:block">${hvemTekst(utenModellHvem)}</span></span><span class="legend-hours">${d.fmtHours(utenModell)} t</span></li>` : ''}</ul>
+    </section>` : ''}
+    ${koder.size ? `
+    <section class="card">
+      <h2>Punktkoder</h2>
+      <ul class="legend">${[...koder].sort((a, b) => b[1] - a[1]).map(([kode, n]) => `
+        <li><span class="legend-name">${esc(kode)}</span><span class="legend-hours">${n} stk</span></li>`).join('')}</ul>
+      <div class="day-total"><span>Sum punkter</span><strong>${[...koder.values()].reduce((s, n) => s + n, 0)} stk</strong></div>
+    </section>` : ''}`;
 }
 
 /* --- Stemple --- */
@@ -1156,6 +1368,11 @@ const actions = {
     if (!inp) return;
     try { inp.showPicker(); } catch { inp.focus(); }
   },
+  'dash-prev'() { ui.dashUke = d.addDays(ui.dashUke, -7); render(); },
+  'dash-next'() { ui.dashUke = d.addDays(ui.dashUke, 7); render(); },
+  'dash-current'() { ui.dashUke = d.mondayOf(d.todayISO()); render(); },
+  'dash-project'(el) { ui.dashProsjekt = el.dataset.navn; render(); },
+  'dash-back'() { ui.dashProsjekt = null; render(); },
   'week-prev'() { ui.weekStart = d.addDays(ui.weekStart, -7); render(); },
   'week-next'() { ui.weekStart = d.addDays(ui.weekStart, 7); render(); },
   'week-current'() { ui.weekStart = d.mondayOf(d.todayISO()); render(); },
@@ -1211,6 +1428,8 @@ const actions = {
     ui.infrakit = null;
     ui.integrasjoner = null;
     ui.brukere = null;
+    ui.alleTimer = null;
+    ui.dashProsjekt = null;
     ui.loginModus = 'login';
     render();
   },

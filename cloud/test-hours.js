@@ -205,6 +205,12 @@ export async function kjorTimeTest() {
       const n = dager.find((d) => d.machine === 'Gravemaskin A')?.note || '';
       return n.includes('5 punkter') && n.includes('SOK') && n.includes('3 stk') && n.includes('V-KUM') && n.includes('(uten kode)') && !n.includes('ANNEN');
     })(),
+    strukturertRett: (() => {
+      const g = dager.find((d) => d.machine === 'Gravemaskin A') || {};
+      return g.points === 5 && g.codes && g.codes.SOK === 3 && Array.isArray(g.models)
+        && g.models.some((m) => m.name === 'Traubunn P200' && m.from === '08:00' && m.hours === 6)
+        && g.noModelHours === 1;
+    })(),
     modellerRett: (() => {
       const n = dager.find((d) => d.machine === 'Gravemaskin A')?.note || '';
       return n.includes('pel 1200-1450') && n.includes('08:00 Traubunn P200 · 6 t')

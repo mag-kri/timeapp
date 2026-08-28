@@ -37,7 +37,7 @@
 // verktoy med ulike tegnsett.
 
 // Oekes ved endringer, slik at appen kan se hvilken serverversjon som kjoerer
-const VERSJON = 11;
+const VERSJON = 12;
 
 const IAM = 'https://iam.infrakit.com/auth/token';
 const IK = 'https://app.infrakit.com/kuura';
@@ -597,6 +597,13 @@ async function buildHours(token, kunProsjektId) {
           note,
           start: d.first ? `${dag}T${d.first}:00` : null,
           end: d.last ? `${dag}T${d.last}:00` : null,
+          // Strukturert for oversikter - notatet over er kun for mennesker
+          points: antallPunkter,
+          codes: d.koder && d.koder.size ? Object.fromEntries(d.koder) : null,
+          models: d.mod.size
+            ? [...d.mod].map(([n, m]) => ({ name: n, from: m.fra, hours: Math.round((m.ms / 3600000) * 100) / 100 }))
+            : null,
+          noModelHours: visUtenModell ? Math.round((utenMs / 3600000) * 100) / 100 : 0,
         });
       }
     } catch { /* hopp over kjoretoy som feiler */ }

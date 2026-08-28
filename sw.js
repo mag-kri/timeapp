@@ -1,14 +1,14 @@
 // Service worker: nettverk først, cache som reserve – appen er alltid fersk
 // når du er på nett, og fungerer fullt ut uten nett.
 // VERSION og ?v= bumpes ved hver utrulling, i takt med APP_VERSJON i js/app.js
-const VERSION = 'timeapp-v14';
+const VERSION = 'timeapp-v15';
 const ASSETS = [
   './',
   './index.html',
-  './css/app.css?v=14',
-  './js/app.js?v=14',
-  './js/store.js?v=14',
-  './js/dates.js?v=14',
+  './css/app.css?v=15',
+  './js/app.js?v=15',
+  './js/store.js?v=15',
+  './js/dates.js?v=15',
   './manifest.webmanifest',
   './favicon.svg',
   './icons/icon-192.png',

@@ -1,6 +1,6 @@
-import * as store from './store.js?v=14';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=14';
-import * as d from './dates.js?v=14';
+import * as store from './store.js?v=15';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=15';
+import * as d from './dates.js?v=15';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
@@ -823,6 +823,11 @@ function maybePrefillMachineHours() {
   const hint = document.getElementById('machineHint');
   const machine = form.machine.value.trim();
   const isNew = !form.dataset.editId;
+  // Ny maskin = ny tidslinje: neste trykk skal settes som start igjen
+  if (form.dataset.sisteMaskin !== machine) {
+    form.dataset.sisteMaskin = machine;
+    delete form.dataset.tidTrykk;
+  }
   const hit = machine ? infrakitEntryFor(form.dataset.date, machine) : null;
 
   if (isNew) {
@@ -835,13 +840,26 @@ function maybePrefillMachineHours() {
     if (hit && hit.projectId && form.projectId) form.projectId.value = hit.projectId;
   }
 
-  // Maskinens arbeidsøkter som trykkbare tidsforslag – pausene mellom dem
-  // er gjerne der en annen tok over maskinen
+  // Maskinens dag som tidslinje: økter og modellbytter er holdepunktene som
+  // gjør det lett å huske når man selv gikk av og en annen tok over
   const tl = document.getElementById('maskinOkter');
   if (tl) {
-    if (hit && Array.isArray(hit.sessions) && hit.sessions.length) {
-      tl.innerHTML = `<span class="field-label">Maskinens økter <span class="muted">– trykk for å bruke tida</span></span>
-        <div class="okter">${hit.sessions.map((s) => `<button type="button" class="btn ghost small" data-action="bruk-okt" data-fra="${esc(s.from)}" data-til="${esc(s.to)}">${esc(s.from)}–${esc(s.to)}</button>`).join('')}</div>`;
+    const okter = (hit && Array.isArray(hit.sessions) && hit.sessions) || [];
+    const rader = [];
+    for (const s of okter) {
+      rader.push({ tid: s.from, tekst: 'maskinen startet' });
+      rader.push({ tid: s.to, tekst: 'maskinen stoppet' });
+    }
+    for (const m of (hit && hit.models) || []) {
+      if (m && m.from) rader.push({ tid: m.from, tekst: `${m.name}${m.hours ? ' · ' + d.fmtHours(m.hours) + ' t' : ''}` });
+    }
+    rader.sort((a, b) => String(a.tid).localeCompare(String(b.tid)));
+    if (rader.length) {
+      tl.innerHTML = `
+        ${okter.length > 1 ? `<span class="field-label">Maskinens økter <span class="muted">– trykk for hele perioden</span></span>
+        <div class="okter">${okter.map((s) => `<button type="button" class="btn ghost small" data-action="bruk-okt" data-fra="${esc(s.from)}" data-til="${esc(s.to)}">${esc(s.from)}–${esc(s.to)}</button>`).join('')}</div>` : ''}
+        <span class="field-label">Maskinens dag <span class="muted">– trykk når du begynte, så når du ga deg</span></span>
+        <div class="tidslinje">${rader.map((r) => `<button type="button" data-action="bruk-tid" data-tid="${esc(r.tid)}"><strong>${esc(r.tid)}</strong>${esc(r.tekst)}</button>`).join('')}</div>`;
       tl.hidden = false;
     } else {
       tl.innerHTML = '';
@@ -966,6 +984,26 @@ async function opprettEksternt(navn, systemer) {
 
 /* ---------- Hjelpere ---------- */
 
+// Setter start/slutt fra tidslinja og regner timer når begge er der
+function settTidsrom(form, fra, til) {
+  if (fra) {
+    form.timeStart.value = fra;
+    form.timeStart.dataset.auto = fra;
+  }
+  if (til) {
+    form.timeEnd.value = til;
+    form.timeEnd.dataset.auto = til;
+  }
+  const s = form.timeStart.value;
+  const e = form.timeEnd.value;
+  if (s && e && e > s) {
+    const ms = new Date(`2000-01-01T${e}:00`) - new Date(`2000-01-01T${s}:00`);
+    const t = d.fmtHours(Math.round((ms / 3600000) * 100) / 100);
+    form.hours.value = t;
+    form.hours.dataset.auto = t;
+  }
+}
+
 function bumpHours(delta) {
   const inp = document.getElementById('efHours');
   if (!inp) return;
@@ -978,7 +1016,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 14;
+const APP_VERSJON = 15;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 
@@ -1472,17 +1510,20 @@ const actions = {
   'bruk-okt'(el) {
     const form = document.getElementById('entryForm');
     if (!form || !form.timeStart) return;
-    const fra = el.dataset.fra;
-    const til = el.dataset.til;
-    form.timeStart.value = fra;
-    form.timeStart.dataset.auto = fra;
-    form.timeEnd.value = til;
-    form.timeEnd.dataset.auto = til;
-    const ms = new Date(`2000-01-01T${til}:00`) - new Date(`2000-01-01T${fra}:00`);
-    if (ms > 0) {
-      const t = d.fmtHours(Math.round((ms / 3600000) * 100) / 100);
-      form.hours.value = t;
-      form.hours.dataset.auto = t;
+    settTidsrom(form, el.dataset.fra, el.dataset.til);
+  },
+  'bruk-tid'(el) {
+    const form = document.getElementById('entryForm');
+    if (!form || !form.timeStart) return;
+    const t = el.dataset.tid;
+    const start = form.timeStart.value;
+    // Første trykk setter start (slutt beholdes), neste trykk med senere
+    // klokkeslett setter slutt. Et tidligere klokkeslett flytter starten.
+    if (form.dataset.tidTrykk !== '1' || !start || t <= start) {
+      settTidsrom(form, t, null);
+      form.dataset.tidTrykk = '1';
+    } else {
+      settTidsrom(form, start, t);
     }
   },
   'hours-minus'() { bumpHours(-0.5); },

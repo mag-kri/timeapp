@@ -367,6 +367,30 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
   margin-top: 6px;
 }
 
+/* Maskinens dag: trykkbar tidslinje med økter og modellbytter */
+.tidslinje {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.tidslinje button {
+  text-align: left;
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 7px 10px;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.tidslinje button strong {
+  font-variant-numeric: tabular-nums;
+  margin-right: 8px;
+}
+.tidslinje button:active { border-color: var(--accent); }
+
 /* Rader i «Andre systemer»-kortet */
 .integrad {
   display: flex;

@@ -628,7 +628,7 @@ function renderMore() {
     ${erKoordinator() ? renderBrukere() : ''}
     <section class="card">
       <h2>Data</h2>
-      <p class="muted small" style="margin:0 0 12px">Alt lagres kun lokalt på denne enheten. Ta en sikkerhetskopi med jevne mellomrom.</p>
+      <p class="muted small" style="margin:0 0 12px">Timeføringene dine synkes til bedriftens database. Prosjektfarger og maskindata ligger lokalt på enheten – ta gjerne en sikkerhetskopi i tillegg.</p>
       <div class="btnrow" style="margin:0">
         <button class="btn" data-action="export" style="flex:1">Eksporter</button>
         <button class="btn" data-action="import" style="flex:1">Importer</button>
@@ -640,7 +640,7 @@ function renderMore() {
       <h2>Installer som app</h2>
       <p class="small" style="margin:0 0 8px"><strong>iPhone:</strong> Åpne siden i Safari → trykk Del-knappen → «Legg til på Hjem-skjerm».</p>
       <p class="small" style="margin:0 0 8px"><strong>Android:</strong> Åpne siden i Chrome → meny (⋮) → «Legg til på startsiden» / «Installer app».</p>
-      <p class="muted small" style="margin:0">Timeapp v1 · fungerer offline</p>
+      <p class="muted small" style="margin:0">Timeapp v${APP_VERSJON} · fungerer offline</p>
     </section>`;
 }
 
@@ -923,6 +923,8 @@ function bumpHours(delta) {
 
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
+// Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
+const APP_VERSJON = 12;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 

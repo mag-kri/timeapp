@@ -367,22 +367,38 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
   margin-top: 6px;
 }
 
-/* Maskinens dag: trykkbar tidslinje med økter og modellbytter */
+/* Maskinens dag: sammenleggbar, trykkbar tidslinje */
+.dagdetalj {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 10px;
+}
+.dagdetalj summary {
+  cursor: pointer;
+  padding: 9px 2px;
+  font-size: 14px;
+  font-weight: 600;
+  list-style: none;
+}
+.dagdetalj summary::-webkit-details-marker { display: none; }
+.dagdetalj summary::after { content: ' ▾'; color: var(--muted, #888); }
+.dagdetalj[open] summary::after { content: ' ▴'; }
 .tidslinje {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-top: 6px;
+  margin: 6px 0 10px;
 }
 .tidslinje button {
   text-align: left;
   background: none;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 7px 10px;
+  border-radius: 8px;
+  padding: 6px 10px;
   color: var(--ink);
   font: inherit;
-  font-size: 14px;
+  font-size: 13px;
   cursor: pointer;
 }
 .tidslinje button strong {

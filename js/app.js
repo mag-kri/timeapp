@@ -1,6 +1,6 @@
-import * as store from './store.js?v=15';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=15';
-import * as d from './dates.js?v=15';
+import * as store from './store.js?v=16';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=16';
+import * as d from './dates.js?v=16';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
@@ -857,11 +857,17 @@ function maybePrefillMachineHours() {
     }
     rader.sort((a, b) => String(a.tid).localeCompare(String(b.tid)));
     if (rader.length) {
+      // Sammenlagt til én linje som standard, og husk om brukeren har åpnet den
+      const varAapen = !!tl.querySelector('details[open]');
+      const spennFra = rader[0].tid;
+      const spennTil = rader[rader.length - 1].tid;
       tl.innerHTML = `
-        ${okter.length > 1 ? `<span class="field-label">Maskinens økter <span class="muted">– trykk for hele perioden</span></span>
-        <div class="okter">${okter.map((s) => `<button type="button" class="btn ghost small" data-action="bruk-okt" data-fra="${esc(s.from)}" data-til="${esc(s.to)}">${esc(s.from)}–${esc(s.to)}</button>`).join('')}</div>` : ''}
-        <span class="field-label">Maskinens dag <span class="muted">– trykk når du begynte, så når du ga deg</span></span>
-        <div class="tidslinje">${rader.map((r) => `<button type="button" data-action="bruk-tid" data-tid="${esc(r.tid)}"><strong>${esc(r.tid)}</strong>${esc(r.tekst)}</button>`).join('')}</div>`;
+        <details class="dagdetalj"${varAapen ? ' open' : ''}>
+          <summary>Maskinens dag · ${esc(spennFra)}–${esc(spennTil)} <span class="muted">– trykk for tider</span></summary>
+          ${okter.length > 1 ? `<div class="okter">${okter.map((s) => `<button type="button" class="btn ghost small" data-action="bruk-okt" data-fra="${esc(s.from)}" data-til="${esc(s.to)}">${esc(s.from)}–${esc(s.to)}</button>`).join('')}</div>` : ''}
+          <p class="muted small" style="margin:6px 0 0">Trykk når du begynte, så når du ga deg – timene regnes ut.</p>
+          <div class="tidslinje">${rader.map((r) => `<button type="button" data-action="bruk-tid" data-tid="${esc(r.tid)}"><strong>${esc(r.tid)}</strong>${esc(r.tekst)}</button>`).join('')}</div>
+        </details>`;
       tl.hidden = false;
     } else {
       tl.innerHTML = '';
@@ -1018,7 +1024,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 15;
+const APP_VERSJON = 16;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 

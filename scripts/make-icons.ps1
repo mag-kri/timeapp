@@ -4,11 +4,17 @@ Add-Type -AssemblyName System.Drawing
 $accent = [System.Drawing.Color]::FromArgb(255, 42, 120, 214)  # #2a78d6
 $white = [System.Drawing.Color]::White
 
-function New-Icon([int]$size, [string]$path, [bool]$fullBleed) {
-    $bmp = New-Object System.Drawing.Bitmap($size, $size)
+function New-Icon([int]$size, [string]$path, [bool]$fullBleed, [bool]$noAlpha = $false) {
+    # App Store avviser ikoner med alfakanal, så butikkikonet tegnes ugjennomsiktig
+    $bmp = if ($noAlpha) {
+        New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    }
+    else {
+        New-Object System.Drawing.Bitmap($size, $size)
+    }
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $g.Clear([System.Drawing.Color]::Transparent)
+    $g.Clear($(if ($noAlpha) { $accent } else { [System.Drawing.Color]::Transparent }))
     $brush = New-Object System.Drawing.SolidBrush($accent)
 
     if ($fullBleed) {
@@ -60,3 +66,8 @@ New-Icon 192 (Join-Path $icons "icon-192.png") $false
 New-Icon 512 (Join-Path $icons "icon-512.png") $false
 New-Icon 512 (Join-Path $icons "maskable-512.png") $true
 New-Icon 180 (Join-Path $icons "apple-touch-icon.png") $true
+
+# Butikkikoner: 1024x1024 uten alfakanal (App Store) og 512x512 (Play Store).
+# Hjørnene skal være firkantede – butikkene runder dem selv.
+New-Icon 1024 (Join-Path $icons "store-icon-1024.png") $true $true
+New-Icon 512 (Join-Path $icons "store-icon-512.png") $true $true

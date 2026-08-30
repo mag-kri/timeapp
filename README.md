@@ -58,14 +58,23 @@ på en hvilken som helst vert med HTTPS. Denne appen ligger på GitHub Pages:
 På telefonen:
 
 - **iPhone**: åpne adressen i Safari → Del → «Legg til på Hjem-skjerm»
-- **Android**: åpne adressen i Chrome → meny (⋮) → «Legg til på startsiden»
+- **Android**: åpne adressen i Chrome → meny (⋮) → «Installer app»
+
+Under **Mer → Installer som app** ligger en installasjonsknapp på Android og
+framgangsmåten for iPhone.
+
+Skal appen inn i Google Play eller App Store, er hele oppskriften i
+[MOBIL.md](MOBIL.md) – med kostnader, forutsetninger og fallgruvene.
 
 ## Filstruktur
 
 ```
 index.html            appens skall
-manifest.webmanifest  PWA-manifest (navn, ikoner, farger)
+manifest.webmanifest  PWA-manifest (navn, ikoner, farger, snarveier)
 sw.js                 service worker (offline-støtte)
+MOBIL.md              oppskrift for Google Play og App Store
+.well-known/          Digital Asset Links (Android-pakking)
+.nojekyll             slår av Jekyll, så .well-known/ faktisk serveres
 css/app.css           alt av stiler, lys og mørk modus
 js/app.js             visninger, innlogging og hendelser
 js/store.js           tilstand + localStorage + eksport/import

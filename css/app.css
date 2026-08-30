@@ -423,12 +423,54 @@ dialog h2 { margin: 0 0 4px; font-size: 18px; }
 }
 .tidslinje button:active { border-color: var(--accent); }
 
-/* Rader i «Andre systemer»-kortet */
-.integrad {
+/* Integrasjoner: ett kort per tjeneste, gruppert etter hva de gjør */
+.intgruppe {
+  margin: 14px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.intgruppe:first-of-type { margin-top: 10px; }
+
+.intgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(228px, 1fr));
+  gap: 10px;
+}
+
+.intkort {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 8px 0;
-  border-top: 1px solid var(--line);
+  gap: 8px;
+  padding: 14px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
 }
-.integrad:first-of-type { border-top: 0; margin-top: 6px; }
+/* Tjenester vi ennå ikke snakker med skal tone seg ned, ikke rope */
+.intkort.venter { opacity: .6; }
+
+.inttopp {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.intnavn { font-size: 15px; font-weight: 700; letter-spacing: -.01em; }
+.inttekst { margin: 0; }
+/* Skyver knappene ned i samme linje selv om beskrivelsene er ulikt lange */
+.intknapper { margin-top: auto; display: flex; flex-direction: column; gap: 6px; }
+.intknapper .btn { width: 100%; }
+
+.intstatus {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.intstatus.pa { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
+.intstatus.av { border-color: var(--line); color: var(--muted); }
+.intstatus.venter { border-color: var(--line); color: var(--muted); }

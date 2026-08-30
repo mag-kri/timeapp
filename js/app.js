@@ -1,6 +1,6 @@
-import * as store from './store.js?v=22';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=22';
-import * as d from './dates.js?v=22';
+import * as store from './store.js?v=23';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=23';
+import * as d from './dates.js?v=23';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
@@ -586,22 +586,78 @@ function renderKonto() {
     </section>`;
 }
 
-function renderInfrakitKort() {
-  const tilkoblet = ui.infrakit && ui.infrakit.connected;
+function intKort(t) {
+  return `
+    <article class="intkort${t.status === 'venter' ? ' venter' : ''}">
+      <div class="inttopp">
+        <span class="intnavn">${t.navn}</span>
+        <span class="intstatus ${t.status}">${t.statusTekst}</span>
+      </div>
+      <p class="inttekst muted small">${t.tekst}</p>
+      ${t.knapper && t.knapper.length ? `<div class="intknapper">${t.knapper.map((k) => `
+        <button class="btn small${k.primary ? ' primary' : ''}" data-action="${k.action}"${k.disabled ? ' disabled' : ''}>${k.tekst}</button>`).join('')}</div>` : ''}
+      ${t.fot || ''}
+    </article>`;
+}
+
+const kommerKort = (navn, tekst) => ({ navn, tekst, status: 'venter', statusTekst: 'Kommer snart' });
+
+function renderIntegrasjoner() {
+  const koord = erKoordinator();
+  const infraPaa = !!(ui.infrakit && ui.infrakit.connected);
+  const i = ui.integrasjoner || {};
+
+  const infrakit = {
+    navn: 'Infrakit',
+    status: infraPaa ? 'pa' : 'av',
+    statusTekst: infraPaa ? 'Tilkoblet' : 'Ikke tilkoblet',
+    tekst: infraPaa
+      ? `Maskiner, timer og dagsrapport hentes automatisk${ui.infrakit.connectedBy ? ' – koblet til av ' + esc(ui.infrakit.connectedBy) : ''}.`
+      : koord
+        ? 'Logg inn med bedriftens Infrakit-bruker for å hente maskiner og timer.'
+        : 'Koordinatoren din må koble til.',
+    knapper: [
+      ...(koord ? [{ tekst: infraPaa ? 'Koble til på nytt …' : 'Koble til Infrakit …', action: 'admin-connect', primary: !infraPaa }] : []),
+      { tekst: ui.synkStatus ? 'Henter …' : 'Oppdater maskiner og timer', action: 'sync-machines', disabled: !!ui.synkStatus },
+    ],
+    fot: ui.synkStatus ? `<p class="muted small center" style="margin:2px 0 0">${esc(ui.synkStatus)}</p>` : '',
+  };
+
+  // Makin' har ingen egen pålogging – maskinene følger Infrakit-prosjektene
+  const makin = {
+    navn: 'Makin’',
+    status: infraPaa ? 'pa' : 'av',
+    statusTekst: infraPaa ? 'Aktiv' : 'Venter på Infrakit',
+    tekst: 'Maskinene følger Infrakit-prosjektene automatisk.',
+  };
+
+  const tripletex = {
+    navn: 'Tripletex',
+    status: i.tripletex ? 'pa' : 'av',
+    statusTekst: i.tripletex ? 'Tilkoblet' : 'Ikke tilkoblet',
+    tekst: i.tripletex
+      ? `Nye prosjekter opprettes samtidig i Tripletex${i.tripletexBy ? ' – koblet til av ' + esc(i.tripletexBy) : ''}.`
+      : 'Koble til for å opprette nye prosjekter her og i Tripletex på én gang.',
+    knapper: koord ? [{ tekst: i.tripletex ? 'Koble til på nytt …' : 'Koble til Tripletex …', action: 'connect-tripletex', primary: !i.tripletex }] : [],
+  };
+
   return `
     <section class="card">
-      <h2>Infrakit</h2>
-      <p class="small" style="margin:0 0 10px">${
-        tilkoblet
-          ? `<strong style="color:var(--good)">✓ Tilkoblet</strong> – maskiner, timer og dagsrapport hentes automatisk${ui.infrakit.connectedBy ? ' (koblet til av ' + esc(ui.infrakit.connectedBy) + ')' : ''}.`
-          : erKoordinator()
-            ? 'Bedriften er ikke koblet til Infrakit ennå. Logg inn med bedriftens Infrakit-bruker for å hente maskiner og timer.'
-            : 'Bedriften er ikke koblet til Infrakit ennå. Koordinatoren din må gjøre det.'
-      }</p>
-      ${erKoordinator() ? `<button class="btn${tilkoblet ? '' : ' primary'}" data-action="admin-connect" style="width:100%">${tilkoblet ? 'Koble til på nytt …' : 'Koble til Infrakit …'}</button>` : ''}
-      <button class="btn" data-action="sync-machines" style="width:100%;margin-top:8px"${ui.synkStatus ? ' disabled' : ''}>${ui.synkStatus ? 'Henter …' : 'Oppdater maskiner og timer'}</button>
-      ${ui.synkStatus ? `<p class="muted small center" style="margin:8px 0 0">${esc(ui.synkStatus)}</p>` : ''}
-      <details style="margin-top:12px">
+      <h2>Integrasjoner</h2>
+      <p class="muted small" style="margin:0">Koble til systemene bedriften bruker, så henter Timeapp data derfra av seg selv.</p>
+
+      <h3 class="intgruppe">Maskinstyring</h3>
+      <div class="intgrid">${[
+        infrakit,
+        makin,
+        kommerKort('Xsite MANAGE', 'Krever API-tilgang fra Novatron (manage@novatron.fi).'),
+        kommerKort('Trimble Connect', 'Krever egen API-app hos Trimble Developer.'),
+      ].map(intKort).join('')}</div>
+
+      <h3 class="intgruppe">Regnskap</h3>
+      <div class="intgrid">${[tripletex].map(intKort).join('')}</div>
+
+      <details style="margin-top:14px">
         <summary class="small muted" style="cursor:pointer">Avansert: serveradresse</summary>
         <input class="input" id="proxyUrl" value="${esc(proxyConf().url || DEFAULT_PROXY)}" autocomplete="off" inputmode="url" style="margin-top:10px">
         <button class="btn small" data-action="save-proxy" style="width:100%;margin-top:8px">Lagre adresse</button>
@@ -655,8 +711,7 @@ function renderMore() {
       <button class="btn" data-action="new-project" style="width:100%;margin-top:8px">+ Nytt prosjekt</button>
     </section>
     ${renderKonto()}
-    ${renderInfrakitKort()}
-    ${renderIntegrasjonerKort()}
+    ${renderIntegrasjoner()}
     ${erKoordinator() ? renderBrukere() : ''}
     <section class="card">
       <h2>Data</h2>
@@ -1287,7 +1342,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 22;
+const APP_VERSJON = 23;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 
@@ -1417,23 +1472,6 @@ async function submitConnect(form) {
 }
 
 // Andre fagsystemer bedriften kan koble til for prosjektoppretting.
-function renderIntegrasjonerKort() {
-  const i = ui.integrasjoner || {};
-  const rad = (navn, innhold) => `<div class="integrad"><strong>${navn}</strong><span class="muted small">${innhold}</span></div>`;
-  return `
-    <section class="card">
-      <h2>Andre systemer</h2>
-      <p class="muted small" style="margin:0 0 4px">Huk av når du lager et nytt prosjekt, så opprettes det samtidig i systemene under.</p>
-      ${rad('Tripletex', i.tripletex
-        ? `<strong style="color:var(--good)">✓ Tilkoblet</strong>${i.tripletexBy ? ' (av ' + esc(i.tripletexBy) + ')' : ''}`
-        : 'Ikke koblet til ennå')}
-      ${erKoordinator() ? `<button class="btn${i.tripletex ? '' : ' primary'}" data-action="connect-tripletex" style="width:100%;margin-bottom:4px">${i.tripletex ? 'Koble til Tripletex på nytt …' : 'Koble til Tripletex …'}</button>` : ''}
-      ${rad('Xsite MANAGE', 'Kommer – krever API-tilgang fra Novatron (manage@novatron.fi)')}
-      ${rad('Trimble Connect', 'Kommer – krever API-app hos Trimble Developer')}
-      ${rad('Makin’', 'Maskinene følger Infrakit-prosjektene automatisk')}
-    </section>`;
-}
-
 // Koordinator kobler bedriften til Tripletex med API-tokens.
 function openTripletexModal() {
   modal.innerHTML = `

@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "net.rentalk.timeapp",
+      "sha256_cert_fingerprints": [
+        "ERSTATT_MEG: SHA-256-avtrykket fra Play Console -> Utgivelse -> Oppsett -> Appintegritet"
+      ]
+    }
+  }
+]

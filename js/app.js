@@ -1,12 +1,16 @@
-import * as store from './store.js?v=21';
-import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=21';
-import * as d from './dates.js?v=21';
+import * as store from './store.js?v=22';
+import { state, PALETTE, NO_PROJECT_COLOR } from './store.js?v=22';
+import * as d from './dates.js?v=22';
 
 const app = document.getElementById('app');
 const modal = document.getElementById('modal');
 
+// Snarveiene i manifestet åpner appen rett på en fane (./?fane=clock)
+const FANER = ['day', 'clock', 'week', 'dash', 'more'];
+const startFane = new URLSearchParams(location.search).get('fane');
+
 const ui = {
-  tab: 'day',
+  tab: FANER.includes(startFane) ? startFane : 'day',
   date: d.todayISO(),
   weekStart: d.mondayOf(d.todayISO()),
   clockProject: '',
@@ -23,6 +27,30 @@ function esc(s) {
 }
 
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/* ---------- Installasjon på hjemskjerm ---------- */
+
+// Chrome på Android (og skrivebordet) tilbyr en ekte installasjonsdialog gjennom
+// beforeinstallprompt. Safari på iPhone gjør det ikke – der må brukeren innom
+// Del-menyen, så vi viser framgangsmåten i stedet for en knapp som ikke finnes.
+let installPrompt = null;
+
+const erIOS = () => /iPad|iPhone|iPod/.test(navigator.userAgent)
+  || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+const erInstallert = () => window.matchMedia('(display-mode: standalone)').matches
+  || window.navigator.standalone === true;
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e;
+  if (ui.tab === 'more') render();
+});
+
+window.addEventListener('appinstalled', () => {
+  installPrompt = null;
+  if (ui.tab === 'more') render();
+});
 
 const icons = {
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.25"/><path d="M12 7.5V12l3 2"/></svg>',
@@ -640,10 +668,29 @@ function renderMore() {
       <input type="file" id="importFile" accept="application/json,.json" hidden>
       <button class="btn ghost danger-text" data-action="reset" style="width:100%;margin-top:8px">Slett alle data …</button>
     </section>
+    ${renderInstallKort()}`;
+}
+
+function renderInstallKort() {
+  if (erInstallert()) {
+    return `
+    <section class="card">
+      <h2>Installert</h2>
+      <p class="small" style="margin:0 0 8px">Timeapp kjører som app på denne enheten.</p>
+      <p class="muted small" style="margin:0">Timeapp v${APP_VERSJON} · fungerer offline</p>
+    </section>`;
+  }
+  const framgangsmaate = installPrompt
+    ? '<button class="btn primary" data-action="install" style="width:100%;margin:0 0 10px">Installer Timeapp</button>'
+    : erIOS()
+      ? '<p class="small" style="margin:0 0 10px">Trykk <strong>Del</strong> nederst i Safari, bla ned og velg <strong>«Legg til på Hjem-skjerm»</strong>.</p>'
+      : `<p class="small" style="margin:0 0 8px"><strong>Android:</strong> meny (⋮) i Chrome → «Installer app».</p>
+         <p class="small" style="margin:0 0 10px"><strong>iPhone:</strong> Del-knappen i Safari → «Legg til på Hjem-skjerm».</p>`;
+  return `
     <section class="card">
       <h2>Installer som app</h2>
-      <p class="small" style="margin:0 0 8px"><strong>iPhone:</strong> Åpne siden i Safari → trykk Del-knappen → «Legg til på Hjem-skjerm».</p>
-      <p class="small" style="margin:0 0 8px"><strong>Android:</strong> Åpne siden i Chrome → meny (⋮) → «Legg til på startsiden» / «Installer app».</p>
+      <p class="muted small" style="margin:0 0 10px">Du får Timeapp som eget ikon uten adresselinje, og den virker like godt uten dekning.</p>
+      ${framgangsmaate}
       <p class="muted small" style="margin:0">Timeapp v${APP_VERSJON} · fungerer offline</p>
     </section>`;
 }
@@ -1240,7 +1287,7 @@ function bumpHours(delta) {
 /* --- Sky: innlogging, brukere og Infrakit-data (cloud/worker.js) --- */
 
 // Holdes i takt med VERSJON i cloud/worker.js ved hver utrulling
-const APP_VERSJON = 21;
+const APP_VERSJON = 22;
 const DEFAULT_PROXY = 'https://timeapp-proxy.magnus-k.workers.dev';
 const PBKDF2_RUNDER = 300000;
 
@@ -1679,6 +1726,13 @@ function syncTimer() {
 
 const actions = {
   tab(el) { ui.tab = el.dataset.tab; render(); },
+  async install() {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    await installPrompt.userChoice;
+    installPrompt = null;
+    render();
+  },
   'clock-in'() {
     const sel = document.getElementById('clockProject');
     store.clockIn(sel ? sel.value : null);

@@ -1,16 +1,35 @@
 {
+  "id": "./",
   "name": "Timeapp",
   "short_name": "Timeapp",
-  "description": "Stempling og timeføring",
+  "description": "Stempling og timeføring for anleggsbedrifter – med maskintimer fra Infrakit.",
   "lang": "nb",
+  "dir": "ltr",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "portrait",
+  "categories": ["business", "productivity", "utilities"],
   "background_color": "#f9f9f7",
   "theme_color": "#2a78d6",
   "icons": [
-    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
     { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    {
+      "name": "Stemple inn eller ut",
+      "short_name": "Stemple",
+      "url": "./?fane=clock",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Dagens timer",
+      "short_name": "Timer",
+      "url": "./?fane=day",
+      "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
   ]
 }
